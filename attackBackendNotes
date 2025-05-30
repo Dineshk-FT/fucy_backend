@@ -1,0 +1,43 @@
+Attack Backend Doc:
+attack is no were related seperate:
+end URL - add/attack
+
+request paramas :
+	model-id : xyz if existing update or else create
+	name : abc
+	type : Attack, Attack trees , vulnerability analysis
+Data:
+
+{
+	_id:mongo_id
+	type : Attack
+	model-id : xyz if existing update or else create
+	scenes:[{
+	    "Approach": "Attack Potential-based Approach",
+	    "Attack Feasabilities Rating": "Medium",
+	    "Elapsed Time": "<= 1 month",
+	    "Equipment": "Specialized",
+	    "Expertise": "Proficient",
+	    "ID": "97b1f3db-c2bf-4537-b2dd-3598aca42834"(uuid),
+	    "Knowledge of the Item": "Public information",
+	    "Name": "new1",
+	    "Window of Opportunity": "Moderate"
+	}]
+}
+{
+	_id:mongo_id
+	model-id : xyz if existing update or else create
+	type : Attack trees
+	scenes:[{
+		"ID": "97b1f3db-c2bf-4537-b2dd-3598aca42834"(uuid),
+		"Name": "new2",
+		templets: {nodes: xyz,edges: abc} (initially empty) 
+	}]
+}
+{
+	_id:mongo_id
+	model-id : xyz if existing update or else create
+	type : vulnerability analysis
+	sences : []
+}
+ 

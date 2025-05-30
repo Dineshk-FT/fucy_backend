@@ -1,0 +1,37 @@
+data=[
+             {
+                 "id": "d308ecf8-8016-4074-9c79-2f795469c253",
+                 "data": {"label": "Power Management","bgColor": "#E9E955"},
+                 "width": 140,
+                 "height": 50,
+                 "type": "input",
+                 "properties": ["Integrity","Authorization"]
+             },
+             {
+                 "id": "3e0e20b9-184b-4901-aaab-ea46928befc8",
+                 "data": {"label": "MCU","bgColor": "#06f9f5"},
+                 "width": 140,
+                 "height": 50,
+                 "type": "default",
+                 "properties": ["Integrity","Authorization"]
+             },
+         ]
+
+
+data= [{"id": "1",
+                "name":name ,
+                "nodes": 
+                [{"id": "d308ecf8-8016-4074-9c79-2f795469c253",
+                        "data": {
+                            "label": "Power Management",
+                            "bgColor": "#E9E955"
+                        },
+                        "width": 140,
+                        "height": 50,
+                        "type": "input",
+                        "properties": [
+                            "Integrity",
+                            "Authorization"
+                        ]
+                    }]
+            }]

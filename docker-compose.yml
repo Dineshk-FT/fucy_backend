@@ -1,0 +1,8 @@
+version: '3'
+services:
+  your_service:
+    image: my_flask_project
+    environment:
+      - MONGO_URI=mongodb://host.docker.internal:27017/
+    ports:
+      - "5000:5000"
