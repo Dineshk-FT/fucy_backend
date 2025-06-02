@@ -39,6 +39,9 @@ def get_threat_scene():
         # First collect all derived scenarios for reference
         derived_scenarios = []
 
+        # Initialize a global key counter for props
+        global_key_counter = 1
+
         # Convert each document to a dictionary and format the "_id" field
         for data in data_cursor:
             data["_id"] = str(data["_id"])  # Convert ObjectId to string
@@ -110,6 +113,22 @@ def get_threat_scene():
 
             data_list.append(data)
 
+        # Now assign global prop keys to **all props** across all layers
+        for data in data_list:
+            for detail in data.get("Details", []):
+                # Assign to top-level detail props
+                if "props" in detail:
+                    for prop in detail["props"]:
+                        prop["key"] = global_key_counter
+                        global_key_counter += 1
+
+                # Check nested Details (like second layer)
+                for second_layer in detail.get("Details", []):
+                    if "props" in second_layer:
+                        for prop in second_layer["props"]:
+                            prop["key"] = global_key_counter
+                            global_key_counter += 1
+
         # Now process threat_ids in User-defined scenarios (new functionality)
         for data in data_list:
             if data.get("type") == "User-defined":
@@ -128,21 +147,18 @@ def get_threat_scene():
                                         if str(derived_detail.get("rowId")) == str(
                                             row_id
                                         ):
-                                            # Check the second layer Details
                                             for second_layer in derived_detail.get(
                                                 "Details", []
                                             ):
                                                 if str(
                                                     second_layer.get("nodeId")
                                                 ) == str(node_id):
-                                                    # Check props for matching propId
                                                     for prop in second_layer.get(
                                                         "props", []
                                                     ):
                                                         if str(prop.get("id")) == str(
                                                             prop_id
                                                         ):
-                                                            # Add the key and name to the threat object
                                                             threat["prop_key"] = (
                                                                 prop.get("key")
                                                             )
