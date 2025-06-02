@@ -38,7 +38,7 @@ def get_threat_scene():
 
         # First collect all derived scenarios for reference
         derived_scenarios = []
-        
+
         # Convert each document to a dictionary and format the "_id" field
         for data in data_cursor:
             data["_id"] = str(data["_id"])  # Convert ObjectId to string
@@ -120,24 +120,44 @@ def get_threat_scene():
                             row_id = threat.get("rowId")
                             node_id = threat.get("nodeId")
                             prop_id = threat.get("propId")
-                            
+
                             # Find matching derived scenario
                             for derived in derived_scenarios:
                                 if derived["model_id"] == model_id:
                                     for derived_detail in derived.get("Details", []):
-                                        if str(derived_detail.get("rowId")) == str(row_id):
+                                        if str(derived_detail.get("rowId")) == str(
+                                            row_id
+                                        ):
                                             # Check the second layer Details
-                                            for second_layer in derived_detail.get("Details", []):
-                                                if str(second_layer.get("nodeId")) == str(node_id):
+                                            for second_layer in derived_detail.get(
+                                                "Details", []
+                                            ):
+                                                if str(
+                                                    second_layer.get("nodeId")
+                                                ) == str(node_id):
                                                     # Check props for matching propId
-                                                    for prop in second_layer.get("props", []):
-                                                        if str(prop.get("id")) == str(prop_id):
+                                                    for prop in second_layer.get(
+                                                        "props", []
+                                                    ):
+                                                        if str(prop.get("id")) == str(
+                                                            prop_id
+                                                        ):
                                                             # Add the key and name to the threat object
-                                                            threat["prop_key"] = prop.get("key")
-                                                            threat["prop_name"] = prop.get("name")
-                                                            threat["damage_scene"] = second_layer.get("name")
-                                                            threat["node_name"] = second_layer.get("node")
-                                                            threat["damage_id"] = derived_detail["id"]
+                                                            threat["prop_key"] = (
+                                                                prop.get("key")
+                                                            )
+                                                            threat["prop_name"] = (
+                                                                prop.get("name")
+                                                            )
+                                                            threat["damage_scene"] = (
+                                                                second_layer.get("name")
+                                                            )
+                                                            threat["node_name"] = (
+                                                                second_layer.get("node")
+                                                            )
+                                                            threat["damage_id"] = (
+                                                                derived_detail["id"]
+                                                            )
                                                             break
                                             break
 
@@ -152,6 +172,7 @@ def get_threat_scene():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/v1/add/threat_scenarios", methods=["POST"], endpoint="add_threat_scene")
 def add_threat_scene():
     try:
@@ -159,12 +180,12 @@ def add_threat_scene():
         model_id = request.form.get("model-id")
         name = request.form.get("name")
         description = request.form.get("Description")
-        
+
         # Get the threat IDs as a JSON string
         threat_ids_str = request.form.get("threatIds")
-        
+
         print("Raw threat_ids:", threat_ids_str)  # Debug print
-        
+
         # Parse the JSON string into a Python list
         try:
             threat_ids = json.loads(threat_ids_str) if threat_ids_str else []
@@ -183,7 +204,7 @@ def add_threat_scene():
             "name": name,
             "description": description,
             "id": uid(),
-            "threat_ids": threat_ids  # Store the parsed list
+            "threat_ids": threat_ids,  # Store the parsed list
         }
 
         existing_document = db.Threat_scenarios.find_one(
@@ -191,6 +212,18 @@ def add_threat_scene():
         )
 
         if existing_document:
+            # Check for duplicate name
+            for detail in existing_document.get("Details", []):
+                if detail.get("name") == name:
+                    return (
+                        jsonify(
+                            {
+                                "error": f"A derived threat scenario with name '{name}' already exists"
+                            }
+                        ),
+                        400,
+                    )
+
             db.Threat_scenarios.update_one(
                 {"model_id": model_id, "type": "User-defined"},
                 {"$push": {"Details": new_data}},
@@ -198,11 +231,7 @@ def add_threat_scene():
             response_message = "Data added to Threat_scenarios Details"
         else:
             db.Threat_scenarios.insert_one(
-                {
-                    "model_id": model_id, 
-                    "type": "User-defined", 
-                    "Details": [new_data]
-                }
+                {"model_id": model_id, "type": "User-defined", "Details": [new_data]}
             )
             response_message = "New Threat_scenarios document created and data added"
 
@@ -210,17 +239,21 @@ def add_threat_scene():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
-@app.route('/v1/update/derved_threat_scene', methods=['PUT', 'PATCH'])
+
+@app.route("/v1/update/derved_threat_scene", methods=["PUT", "PATCH"])
 def update_threat_scene():
     try:
         # Get form data
         model_id = request.form.get("model-id")
         scene_id = request.form.get("scene-id")  # ID of the threat scenario to update
         name = request.form.get("name", None)  # Optional: Update name if provided
-        description = request.form.get("description", None)  # Optional: Update description
-        threat_ids_str = request.form.get("threatIds", None)  # Optional: Update threat IDs
+        description = request.form.get(
+            "description", None
+        )  # Optional: Update description
+        threat_ids_str = request.form.get(
+            "threatIds", None
+        )  # Optional: Update threat IDs
 
         # Validate required fields
         if not model_id:
@@ -252,21 +285,21 @@ def update_threat_scene():
 
         # Update the specific threat scenario
         result = db.Threat_scenarios.update_one(
-            {
-                "model_id": model_id,
-                "type": "User-defined",
-                "Details.id": scene_id
-            },
-            {"$set": update_fields}
+            {"model_id": model_id, "type": "User-defined", "Details.id": scene_id},
+            {"$set": update_fields},
         )
 
         if result.modified_count == 0:
-            return jsonify({"error": "Threat scenario not found or no changes made"}), 404
+            return (
+                jsonify({"error": "Threat scenario not found or no changes made"}),
+                404,
+            )
         else:
             return jsonify({"message": "Threat scenario updated successfully"}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/v1/update/threat_scenario", methods=["PATCH"])
 def update_threat_scenario():
@@ -442,61 +475,46 @@ def delete_threat_scenario():
             if detail_type == "derived":
                 # Step 1: Remove from Threat_scenarios
                 result = db.Threat_scenarios.update_one(
-                    {
-                        "model_id": model_id,
-                        "type": "derived"
-                    },
+                    {"model_id": model_id, "type": "derived"},
                     {
                         "$pull": {
                             "Details.$[outer].Details.$[inner].props": {"id": prop_id}
                         }
                     },
-                    array_filters=[
-                        {"outer.rowId": row_id},
-                        {"inner.nodeId": node_id}
-                    ],
+                    array_filters=[{"outer.rowId": row_id}, {"inner.nodeId": node_id}],
                 )
 
                 if result.modified_count == 0:
                     return (
-                        jsonify({
-                            "error": f"No matching props found for propId {prop_id} in Threat_scenarios"
-                        }),
+                        jsonify(
+                            {
+                                "error": f"No matching props found for propId {prop_id} in Threat_scenarios"
+                            }
+                        ),
                         404,
                     )
 
                 # Step 2: Remove from Damage_scenarios
                 result = db.Damage_scenarios.update_one(
-                    {
-                        "model_id": model_id,
-                        "type": "User-defined"
-                    },
-                    {
-                        "$pull": {
-                            "Details.$[detail].cyberLosses": {"id": prop_id}
-                        }
-                    },
-                    array_filters=[
-                        {"detail._id": row_id}
-                    ],
+                    {"model_id": model_id, "type": "User-defined"},
+                    {"$pull": {"Details.$[detail].cyberLosses": {"id": prop_id}}},
+                    array_filters=[{"detail._id": row_id}],
                 )
 
                 if result.modified_count == 0:
                     return (
-                        jsonify({
-                            "error": f"No matching cyberLosses found for propId {prop_id} in Damage_scenarios"
-                        }),
+                        jsonify(
+                            {
+                                "error": f"No matching cyberLosses found for propId {prop_id} in Damage_scenarios"
+                            }
+                        ),
                         404,
                     )
 
                 # Step 3: Remove from Risk_treatment
                 result = db.Risk_treatment.update_one(
                     {"model_id": model_id},
-                    {
-                        "$pull": {
-                            "Details": {"threat_id": prop_id}
-                        }
-                    }
+                    {"$pull": {"Details": {"threat_id": prop_id}}},
                 )
 
                 # if result.modified_count == 0:
@@ -514,9 +532,11 @@ def delete_threat_scenario():
 
                 if result.modified_count == 0:
                     return (
-                        jsonify({
-                            "error": f"No matching entry found for propId {prop_id} in User-defined"
-                        }),
+                        jsonify(
+                            {
+                                "error": f"No matching entry found for propId {prop_id} in User-defined"
+                            }
+                        ),
                         404,
                     )
 
