@@ -23,6 +23,14 @@ from config import Config
 
 app = Blueprint("doc", __name__)
 
+max_width = 1000  # adjust to fit your frame size
+max_height = 1000
+
+
+def fit_image(original_width, original_height, max_width, max_height):
+    ratio = min(max_width / original_width, max_height / original_height)
+    return original_width * ratio, original_height * ratio
+
 
 @app.route("/v1/generate/doc", methods=["POST"])
 def generate_doc():
@@ -36,6 +44,10 @@ def generate_doc():
         if image_file:
             # Read the image file into a BytesIO stream
             image_stream = io.BytesIO(image_file.read())
+            img = Image(image_stream)
+            img.drawWidth, img.drawHeight = fit_image(
+                img.imageWidth, img.imageHeight, max_width, max_height
+            )
         else:
             image_stream = None
 
@@ -820,7 +832,15 @@ def generate_doc():
                             #         "scenes.threat_key": rsk_tmt.get("threat_key"),
                             #     }
                             # )
-                            attack = db.Attacks.find_one({"model_id": model_id,"scenes.threat_key": {"$exists": True, "$eq": rsk_tmt.get("threat_key")}})
+                            attack = db.Attacks.find_one(
+                                {
+                                    "model_id": model_id,
+                                    "scenes.threat_key": {
+                                        "$exists": True,
+                                        "$eq": rsk_tmt.get("threat_key"),
+                                    },
+                                }
+                            )
                             if attack:
                                 for scene in attack["scenes"]:
                                     if scene["threat_key"] == rsk_tmt.get("threat_key"):

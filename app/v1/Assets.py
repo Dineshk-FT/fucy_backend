@@ -4,6 +4,7 @@ from bson import ObjectId
 from db import db
 from flask import Blueprint
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
+import base64
 
 app = Blueprint("assets", __name__)
 
@@ -19,6 +20,8 @@ def get_asset():
         data = db.Assets.find_one({"model_id": model_id})
         if data:
             data["_id"] = str(data["_id"])
+            if "image" in data and isinstance(data["image"], bytes):
+                data["image"] = base64.b64encode(data["image"]).decode("utf-8")
             return jsonify(data), 200
         else:
             return jsonify({"error": "Model not found"}), 404
@@ -34,6 +37,10 @@ def add_assets():
         template = request.form.get("template")
         asset_name = request.form.get("assetName")
         asset_properties = request.form.get("assetProperties")
+        image_file = request.files.get("image")
+        image = None
+        if image_file:
+            image = image_file.read()
 
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
@@ -66,12 +73,20 @@ def add_assets():
                     else {}
                 )
 
-                existing_details = {
-                    detail["nodeId"]: {prop["name"]: prop["id"] for prop in detail.get("props", [])}
-                    for detail in existing_scenario.get("Details", [])
-                } if existing_scenario else {}
+                existing_details = (
+                    {
+                        detail["nodeId"]: {
+                            prop["name"]: prop["id"] for prop in detail.get("props", [])
+                        }
+                        for detail in existing_scenario.get("Details", [])
+                    }
+                    if existing_scenario
+                    else {}
+                )
 
-                Derivations, Details = getDerivationsAndDetails(template, existing_details)
+                Derivations, Details = getDerivationsAndDetails(
+                    template, existing_details
+                )
 
                 for derivation in Derivations:
                     if derivation["id"] in existing_derivations:
@@ -81,7 +96,13 @@ def add_assets():
 
                 result = db.Assets.update_one(
                     {"_id": ObjectId(asset_id)},
-                    {"$set": {"template": template, "Details": Details}},
+                    {
+                        "$set": {
+                            "template": template,
+                            "Details": Details,
+                            "image": image,
+                        }
+                    },
                 )
                 if result.matched_count == 0:
                     return jsonify({"error": "Asset not found"}), 404
@@ -145,6 +166,8 @@ def add_assets():
         return jsonify({"message": "Asset added successfully"}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
 @app.route("/v1/delete-node/assets", methods=["DELETE"], endpoint="delete_asset_node")
 def delete_asset_node():
     try:
@@ -175,7 +198,11 @@ def delete_asset_node():
 
         # Ensure existing_details is a dictionary, not a list
         details_list = asset.get("Details", [])
-        existing_details = {d["nodeId"]: {prop["name"]: prop["id"] for prop in d.get("props", [])} for d in details_list if isinstance(d, dict)}
+        existing_details = {
+            d["nodeId"]: {prop["name"]: prop["id"] for prop in d.get("props", [])}
+            for d in details_list
+            if isinstance(d, dict)
+        }
 
         # Update the asset in the database
         template = {"nodes": updated_nodes, "edges": updated_edges}
