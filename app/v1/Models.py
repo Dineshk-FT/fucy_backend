@@ -35,6 +35,7 @@ def get_Models():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/v1/get_details/sub_systems", methods=["POST"])
 def get_sub_systems():
     try:
@@ -56,8 +57,6 @@ def get_sub_systems():
         return jsonify({"error": str(e)}), 500
 
 
-
-
 @app.route("/v1/get_details/model", methods=["POST"])
 def get_unique_model():
     try:
@@ -73,14 +72,18 @@ def get_unique_model():
         master_model["_id"] = str(master_model["_id"])
 
         sub_system_ids = master_model.get("sub_systems", [])
-        object_ids = [ObjectId(sid) for sid in sub_system_ids if re.match(r"^[0-9a-fA-F]{24}$", sid)]
-        
+        object_ids = [
+            ObjectId(sid)
+            for sid in sub_system_ids
+            if re.match(r"^[0-9a-fA-F]{24}$", sid)
+        ]
+
         sub_models_cursor = db.Models.find({"_id": {"$in": object_ids}})
         sub_models = []
-        
+
         for model in sub_models_cursor:
             model_id_str = str(model["_id"])
-            
+
             # Pick only required fields from model
             filtered_model = {
                 "_id": model_id_str,
@@ -88,18 +91,22 @@ def get_unique_model():
                 "created_by": model.get("created_by"),
                 "last_updated": model.get("last_updated"),
                 "name": model.get("name"),
-                "user_id": model.get("user_id")
+                "user_id": model.get("user_id"),
             }
 
             # Get only required asset fields
-            assets_cursor = db.Assets.find({"model_id": model_id_str}, {"_id": 1, "model_id": 1, "template": 1})
+            assets_cursor = db.Assets.find(
+                {"model_id": model_id_str}, {"_id": 1, "model_id": 1, "template": 1}
+            )
             filtered_assets = []
             for asset in assets_cursor:
-                filtered_assets.append({
-                    "_id": str(asset["_id"]),
-                    "model_id": asset["model_id"],
-                    "template": asset.get("template", [])
-                })
+                filtered_assets.append(
+                    {
+                        "_id": str(asset["_id"]),
+                        "model_id": asset["model_id"],
+                        "template": asset.get("template", []),
+                    }
+                )
 
             filtered_model["assets"] = filtered_assets
             sub_models.append(filtered_model)
@@ -108,7 +115,8 @@ def get_unique_model():
 
         return jsonify(master_model), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500  
+        return jsonify({"error": str(e)}), 500
+
 
 # @app.route("/v1/get_details/model", methods=["POST"])
 # def get_unique_model():
@@ -148,10 +156,11 @@ def add_Models():
         user_id = request.headers.get("user-id")
         current = datetime.now()
         created_by = request.form.get("createdBy")
-        user = db.accounts.find_one({"_id": ObjectId(user_id)})
+
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
+        user = db.accounts.find_one({"_id": ObjectId(user_id)})
         if not user:
             return jsonify({"error": "No such user found"}), 404
 
@@ -161,6 +170,12 @@ def add_Models():
 
         if not name:
             return jsonify({"error": "Model name is required"}), 400
+
+        # Check if model with same name already exists for this user
+        existing_model = db.Models.find_one({"user_id": user_id, "name": name})
+        if existing_model:
+            return jsonify({"error": "Model with the same name already exists"}), 409
+
         data = {
             "user_id": user_id,
             "name": name,
@@ -169,18 +184,16 @@ def add_Models():
             "Created_at": current,
             "last_updated": current,
             "status": 1,
-            # "config_id":""
+            # "config_id": ""
         }
+
         result = db.Models.insert_one(data)
 
         return (
-            jsonify(
-                {
-                    "model_id": str(result.inserted_id),
-                }
-            ),
+            jsonify({"model_id": str(result.inserted_id)}),
             201,
         )
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -203,15 +216,16 @@ def delete_model():
 
         # Fetch all model IDs for the given user where status = 1, sorted by _id
         all_models = list(
-            db.Models.find({"user_id": user_id, "status": 1}, {"_id": 1})
-            .sort("_id", 1)
+            db.Models.find({"user_id": user_id, "status": 1}, {"_id": 1}).sort("_id", 1)
         )
         all_model_ids = [str(model["_id"]) for model in all_models]
 
         # Find the next or previous model ID
         next_model_id = None
         if all_model_ids:
-            deleted_indexes = [all_model_ids.index(mid) for mid in model_ids if mid in all_model_ids]
+            deleted_indexes = [
+                all_model_ids.index(mid) for mid in model_ids if mid in all_model_ids
+            ]
             if deleted_indexes:
                 min_index = min(deleted_indexes)
                 max_index = max(deleted_indexes)
@@ -226,15 +240,20 @@ def delete_model():
         # Set status to 0 instead of deleting
         db.Models.update_many(
             {"_id": {"$in": object_ids}},
-            {"$set": {"status": 0}},  
+            {"$set": {"status": 0}},
         )
 
         # db.Models.delete_many({'_id': {'$in': object_ids}})  # Uncomment if actual deletion is needed
 
-        return jsonify({
-            "message": f"{len(object_ids)} models deleted successfully",
-            "next_model_id": next_model_id
-        }), 200
+        return (
+            jsonify(
+                {
+                    "message": f"{len(object_ids)} models deleted successfully",
+                    "next_model_id": next_model_id,
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
