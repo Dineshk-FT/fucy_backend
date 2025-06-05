@@ -121,3 +121,13 @@ def getImpactBgcolour(impact):
     }
 
     return impact_color.get(impact, None)
+
+def getFesRateBgColor(rating):
+    rating_color = {
+        "Very low": colors.lightgreen,
+        "Low": colors.green,
+        "Medium": colors.yellow,
+        "High": colors.red,
+        "Very High": colors.red,
+    }
+    return rating_color.get(rating,None)
