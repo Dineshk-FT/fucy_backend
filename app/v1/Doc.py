@@ -110,7 +110,10 @@ def generate_doc():
                 return table
             else:
                 return paragraph     
-# ======================= Damage Scenario Table =======================
+
+# =========================================================================================================================        
+
+# ======================= Damage Scenario Table ===========================================================================
         if damage_scenarios_table == 1:
             damage_record = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
 
@@ -230,9 +233,9 @@ def generate_doc():
                 # else:
                 #     damage_scenario_data = [["No Damage Scenario Data Found"]]
 
-# =========================================================================================
+# ==========================================================================================================================
 
-# ========================= Threat Scenario Table =========================================
+# ========================= Threat Scenario Table ==========================================================================
         if threat_scenarios_table == 1:
             threat_record = db.Threat_scenarios.find_one({"model_id": model_id, "type": "derived"})
 
@@ -384,9 +387,10 @@ def generate_doc():
 
                 else:
                     threat_scenario_data = [["No Threat Scenarios Data Found"]]
-# =====================================================================================
 
-# ========================= Attack Tree Table =========================================
+# ==========================================================================================================================
+
+# ========================= Attack Tree Table ==============================================================================
         if attack_trees_table == 1:
             attack_record = db.Attacks.find_one({"model_id": model_id, "type": "attack"})
             
@@ -505,9 +509,9 @@ def generate_doc():
                 # else:
                 #     # If no attack record found
                 #     attack_tree_data = [["No Attack Tree Data Found"]]
-# =====================================================================================
+# =========================================================================================================================
 
-# ========================= Risk Treatment Table =========================================
+# ========================= Risk Treatment Table ==========================================================================
         if risk_treatment == 1:
             risk_treatment_record = db.Risk_treatment.find_one({"model_id": model_id})
             cyberSecurity_record = db.Cybersecurity.find_one({"model_id": model_id, "type": "cybersecurity_requirements"})
@@ -724,8 +728,9 @@ def generate_doc():
                     # else:
                     #     risk_trtmnt_data = [["No Risk Treatment Data Found"]]
 
+# =========================================================================================================================        
        
-# =========================Cyber Security Goals =========================================
+# =========================Cyber Security Goals ===========================================================================
         if cyber_security_goals == 1:
             # Step 1: Fetch record from DB
             cybersecurity_record = db.Cybersecurity.find_one({
@@ -741,48 +746,33 @@ def generate_doc():
             ]
 
             # Step 3: Get columns requested from form and apply filtering
-            raw_column_input = request.form.get('cyberGoalTblClms', '')
-            
-            if raw_column_input:
-                if isinstance(raw_column_input, str):
-                    cyber_columns = raw_column_input.split(',')
+            cyber_columns_raw = request.form.get('cyberGoalTblClms', '')
+
+            if cyber_columns_raw:
+                if isinstance(cyber_columns_raw, str):
+                    cyber_columns = cyber_columns_raw.split(',')
                 else:
-                    cyber_columns = raw_column_input
+                    cyber_columns = cyber_columns_raw
             else:
                 cyber_columns = valid_columns
 
-            # Filter columns to only valid ones
+            # Filter out any invalid columns
             cyber_columns = [col.strip() for col in cyber_columns if col.strip() in valid_columns]
 
             # Step 4: Fallback if no valid columns
             if not cyber_columns:
                 cybersecurity_goals_data = [["No valid columns provided"]]
             else:
-                # Step 5: Check if data exists in DB
                 if cybersecurity_record:
                     cybersecurity_details = cybersecurity_record.get("scenes", [])
 
-                    # Create headers based on selected columns
+                    # Step 5: Build header row
                     cyber_headers = []
                     for col in cyber_columns:
-                        if col == "SNo":
-                            cyber_headers.append(wrap_content("SNo", 'white'))
-                        elif col == "Name":
-                            cyber_headers.append(wrap_content("Name", 'white'))
-                        elif col == "Description":
-                            cyber_headers.append(wrap_content("Description", 'white'))
-                        elif col == "CAL":
-                            cyber_headers.append(wrap_content("CAL", 'white'))
-                        elif col == "Related Threat Scenario":
-                            cyber_headers.append(wrap_content("Related Threat Scenario", 'white'))
-                        elif col == "Related Cybersecurity Requirements":
-                            cyber_headers.append(wrap_content("Related Cybersecurity Requirements", 'white'))
-                        elif col == "Related Cybersecurity Controls":
-                            cyber_headers.append(wrap_content("Related Cybersecurity Controls", 'white'))
-
+                        cyber_headers.append(wrap_content(col, 'white'))
                     cybersecurity_goals_data = [cyber_headers]
 
-                    # Step 6: Iterate through scenes and build rows
+                    # Step 6: Build data rows
                     for index, detail in enumerate(cybersecurity_details):
                         row = []
                         related_threats = detail.get("threat_key", [])
@@ -797,32 +787,29 @@ def generate_doc():
                             elif col == "Description":
                                 row.append(wrap_content(detail.get("Description", ""), 'black'))
                             elif col == "CAL":
-                                cal_value = detail.get("CAL", "") or "-"
-                                row.append(wrap_content(cal_value, 'black'))
+                                row.append(wrap_content(detail.get("CAL", "") or "-", 'black'))
                             elif col == "Related Threat Scenario":
                                 if related_threats:
-                                    threat_entries = [f"🔒 {threat}" for threat in sorted(related_threats)]
-                                    threat_content = "\n".join(threat_entries)
-                                    row.append(wrap_content(threat_content, 'black'))
+                                    threats = [f"🔒 {threat}" for threat in sorted(related_threats)]
+                                    row.append(wrap_content("\n".join(threats), 'black'))
                                 else:
                                     row.append(wrap_content("-", 'black'))
                             elif col == "Related Cybersecurity Requirements":
                                 if related_reqs:
-                                    reqs_content = "\n".join(sorted(related_reqs))
-                                    row.append(wrap_content(reqs_content, 'black'))
+                                    row.append(wrap_content("\n".join(sorted(related_reqs)), 'black'))
                                 else:
                                     row.append(wrap_content("-", 'black'))
                             elif col == "Related Cybersecurity Controls":
                                 if related_controls:
-                                    controls_content = "\n".join(sorted(related_controls))
-                                    row.append(wrap_content(controls_content, 'black'))
+                                    row.append(wrap_content("\n".join(sorted(related_controls)), 'black'))
                                 else:
                                     row.append(wrap_content("-", 'black'))
 
                         cybersecurity_goals_data.append(row)
 
-        # =========================Cyber Security Requirements =========================================
-                
+# =========================================================================================================================        
+
+# =========================Cyber Security Requirements ====================================================================
         if cyber_security_requirements == 1:
             # Step 1: Fetch record from DB
             cybersecurity_record = db.Cybersecurity.find_one({
@@ -836,45 +823,33 @@ def generate_doc():
                 "Related Cybersecurity Goals", "Related Cybersecurity Controls"
             ]
 
-            # Step 3: Get columns requested from form and apply filtering
-            raw_column_input = request.form.get('cyberReqTblClms', '')
-            
-            if raw_column_input:
-                if isinstance(raw_column_input, str):
-                    cyber_columns = raw_column_input.split(',')
+            # Step 3: Get columns from form
+            cyber_columns_raw = request.form.get('cyberReqTblClms', '')
+
+            if cyber_columns_raw:
+                if isinstance(cyber_columns_raw, str):
+                    cyber_columns = cyber_columns_raw.split(',')
                 else:
-                    cyber_columns = raw_column_input
+                    cyber_columns = cyber_columns_raw
             else:
                 cyber_columns = valid_columns
 
-            # Filter columns to only valid ones
+            # Filter out invalid columns
             cyber_columns = [col.strip() for col in cyber_columns if col.strip() in valid_columns]
 
-            # Step 4: Fallback if no valid columns remain
+            # Step 4: Fallback if no valid columns
             if not cyber_columns:
                 cybersecurity_requirements_data = [["No valid columns provided"]]
             else:
-                # Step 5: Check if data exists in DB
+                # Step 5: Check for DB data
                 if cybersecurity_record:
                     cybersecurity_details = cybersecurity_record.get("scenes", [])
 
-                    # Create headers based on selected columns
-                    cyber_headers = []
-                    for col in cyber_columns:
-                        if col == "SNo":
-                            cyber_headers.append(wrap_content("SNo", 'white'))
-                        elif col == "Name":
-                            cyber_headers.append(wrap_content("Name", 'white'))
-                        elif col == "Description":
-                            cyber_headers.append(wrap_content("Description", 'white'))
-                        elif col == "Related Cybersecurity Goals":
-                            cyber_headers.append(wrap_content("Related Cybersecurity Goals", 'white'))
-                        elif col == "Related Cybersecurity Controls":
-                            cyber_headers.append(wrap_content("Related Cybersecurity Controls", 'white'))
-
+                    # Step 6: Build table headers
+                    cyber_headers = [wrap_content(col, 'white') for col in cyber_columns]
                     cybersecurity_requirements_data = [cyber_headers]
 
-                    # Step 6: Iterate through scenes and build rows
+                    # Step 7: Build rows for each scene
                     for index, detail in enumerate(cybersecurity_details):
                         row = []
                         related_goals = detail.get("goals", [])
@@ -886,30 +861,24 @@ def generate_doc():
                             elif col == "Name":
                                 row.append(wrap_content(detail.get("Name", ""), 'black'))
                             elif col == "Description":
-                                # Use "Description", fallback to "description", then generate default
-                                description = (
-                                    detail.get("Description")
-                                    or detail.get("description")
-                                    or f"description for {detail.get('Name', 'Unnamed')}"
-                                )
-                                row.append(wrap_content(description, 'black'))
+                                desc = detail.get("Description") or detail.get("description") or f"description for {detail.get('Name', 'Unnamed')}"
+                                row.append(wrap_content(desc, 'black'))
                             elif col == "Related Cybersecurity Goals":
                                 if related_goals:
-                                    goals_content = "\n".join(sorted(related_goals))
-                                    row.append(wrap_content(goals_content, 'black'))
+                                    row.append(wrap_content("\n".join(sorted(related_goals)), 'black'))
                                 else:
                                     row.append(wrap_content("-", 'black'))
                             elif col == "Related Cybersecurity Controls":
                                 if related_controls:
-                                    controls_content = "\n".join(sorted(related_controls))
-                                    row.append(wrap_content(controls_content, 'black'))
+                                    row.append(wrap_content("\n".join(sorted(related_controls)), 'black'))
                                 else:
                                     row.append(wrap_content("-", 'black'))
 
                         cybersecurity_requirements_data.append(row)
 
-        # =========================Cyber Security Controls =========================================
-                    
+# =========================================================================================================================                                
+
+# =========================Cyber Security Controls ========================================================================
         if cyber_security_controls == 1:
             # Step 1: Fetch record from DB
             cybersecurity_record = db.Cybersecurity.find_one({
@@ -925,7 +894,7 @@ def generate_doc():
 
             # Step 3: Get columns requested from form and apply filtering
             raw_column_input = request.form.get('cyberCtrlTblClms', '')
-            
+
             if raw_column_input:
                 if isinstance(raw_column_input, str):
                     cyber_columns = raw_column_input.split(',')
@@ -934,7 +903,7 @@ def generate_doc():
             else:
                 cyber_columns = valid_columns
 
-            # Filter columns to only valid ones
+            # Filter only valid columns
             cyber_columns = [col.strip() for col in cyber_columns if col.strip() in valid_columns]
 
             # Step 4: Fallback if no valid columns
@@ -945,7 +914,7 @@ def generate_doc():
                 if cybersecurity_record:
                     cybersecurity_details = cybersecurity_record.get("scenes", [])
 
-                    # Create headers based on selected columns
+                    # Step 6: Create table headers
                     cyber_headers = []
                     for col in cyber_columns:
                         if col == "SNo":
@@ -961,7 +930,7 @@ def generate_doc():
 
                     cybersecurity_controls_data = [cyber_headers]
 
-                    # Step 6: Iterate through scenes and build rows
+                    # Step 7: Fill table rows
                     for index, detail in enumerate(cybersecurity_details):
                         row = []
                         related_goals = detail.get("goals", [])
@@ -973,7 +942,12 @@ def generate_doc():
                             elif col == "Name":
                                 row.append(wrap_content(detail.get("Name", ""), 'black'))
                             elif col == "Description":
-                                row.append(wrap_content(detail.get("Description", ""), 'black'))
+                                description = (
+                                    detail.get("Description")
+                                    or detail.get("description")
+                                    or f"description for {detail.get('Name', 'Unnamed')}"
+                                )
+                                row.append(wrap_content(description, 'black'))
                             elif col == "Related Cybersecurity Goals":
                                 if related_goals:
                                     goals_content = "\n".join(sorted(related_goals))
@@ -989,8 +963,9 @@ def generate_doc():
 
                         cybersecurity_controls_data.append(row)
 
-        # =========================Cyber Security Claims =========================================
-                    
+# ========================================================================================================================        
+
+# =========================Cyber Security Claims ==========================================================================        
         if cyber_security_claims == 1:
             # Step 1: Fetch record from DB
             cybersecurity_record = db.Cybersecurity.find_one({
@@ -1006,7 +981,7 @@ def generate_doc():
 
             # Step 3: Get columns requested from form and apply filtering
             raw_column_input = request.form.get('cyberClaimTblClms', '')
-            
+
             if raw_column_input:
                 if isinstance(raw_column_input, str):
                     cyber_columns = raw_column_input.split(',')
@@ -1026,7 +1001,7 @@ def generate_doc():
                 if cybersecurity_record:
                     cybersecurity_details = cybersecurity_record.get("scenes", [])
 
-                    # Create headers based on selected columns
+                    # Step 6: Create headers based on selected columns
                     cyber_headers = []
                     for col in cyber_columns:
                         if col == "SNo":
@@ -1042,7 +1017,7 @@ def generate_doc():
 
                     cybersecurity_claims_data = [cyber_headers]
 
-                    # Step 6: Iterate through scenes and build rows
+                    # Step 7: Iterate through scenes and build rows
                     for index, detail in enumerate(cybersecurity_details):
                         row = []
                         related_threats = detail.get("threat_key", [])
@@ -1053,7 +1028,12 @@ def generate_doc():
                             elif col == "Name":
                                 row.append(wrap_content(detail.get("Name", ""), 'black'))
                             elif col == "Description":
-                                row.append(wrap_content(detail.get("Description", ""), 'black'))
+                                desc = (
+                                    detail.get("Description")
+                                    or detail.get("description")
+                                    or f"description for {detail.get('Name', 'Unnamed')}"
+                                )
+                                row.append(wrap_content(desc, 'black'))
                             elif col == "Condition for Re-Evaluation":
                                 condition = detail.get("Condition_for_Re_Evaluation", "") or "-"
                                 row.append(wrap_content(condition, 'black'))
@@ -1066,8 +1046,10 @@ def generate_doc():
                                     row.append(wrap_content("-", 'black'))
 
                         cybersecurity_claims_data.append(row)
-                            
-# =========================== PDF Generation ===========================
+
+# ==========================================================================================================================
+                        
+# =========================== PDF Generation ===============================================================================
         mode_record = db.Models.find_one({"_id": ObjectId(model_id)})
         current_datetime = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         # pdf_file_name = f"{mode_record['name']}({current_datetime})"
@@ -1107,7 +1089,7 @@ def generate_doc():
             img = resize_image(image_stream, max_width=800, max_height=800)  # Adjust max size as needed
             img.hAlign = 'LEFT'
             elements.append(img)
-            elements.append(Spacer(1, 12))
+            elements.append(PageBreak())
 
         if damage_scenarios_table == 1:
             if damage_record:
@@ -1318,28 +1300,28 @@ def generate_doc():
         # Build PDF
         pdf.build(elements)
 
-# FOr azure===================================================================
+# FOr azure==================================================================================================================
         azure_connection_string = Config.AZURE_CONNECTION_STRING
         azure_container_name = Config.AZURE_CONTAINER_NAME
 
-        # Upload PDF to Azure Blob Storage
+#         # Upload PDF to Azure Blob Storage
         blob_service_client = BlobServiceClient.from_connection_string(azure_connection_string)
         blob_client = blob_service_client.get_blob_client(container=azure_container_name, blob=pdf_file_name + ".pdf")
 
-        # Open the generated PDF and upload it
+#         # Open the generated PDF and upload it
         with open(pdf_path, "rb") as data:
             blob_client.upload_blob(data, overwrite=True, content_settings=ContentSettings(content_type="application/pdf"))
 
-        # Generate a URL for the uploaded file with SAS token using the new method
+#         # Generate a URL for the uploaded file with SAS token using the new method
         file_url = generate_sas_url(blob_service_client, pdf_file_name + ".pdf")
 
-        # this is used to delete once the file is upload in azure blob
-        # if file_url and os.path.exists(pdf_path):
-            # os.remove(pdf_path)
+#         # this is used to delete once the file is upload in azure blob
+#         # if file_url and os.path.exists(pdf_path):
+#             # os.remove(pdf_path)
 
-        # Delete the local file after upload (optional)
+#         # Delete the local file after upload (optional)
         os.remove(pdf_path)
-# FOr azure===========================
+# FOr azure==================================================================================================================
 
         return jsonify({
             "message": "PDF generated and uploaded successfully.",

@@ -108,5 +108,13 @@ def create_app():
     from app.v1.importExport import app as impexp
     
     app.register_blueprint(impexp)
+    
+    from app.v1.ReqIf import app as reqif
+    
+    app.register_blueprint(reqif)
+
+    from app.v1.guides import guides as guide
+    
+    app.register_blueprint(guide)
 
     return app
