@@ -77,6 +77,10 @@ def create_app():
 
     app.register_blueprint(models)
 
+    from app.v1.Libraries import app as libraries
+
+    app.register_blueprint(libraries)
+
     from app.v1.Assets import app as assets
 
     app.register_blueprint(assets)
