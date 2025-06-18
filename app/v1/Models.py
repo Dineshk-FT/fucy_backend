@@ -202,6 +202,33 @@ def add_Model_or_Library():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/v1/convert_model_type", methods=["POST"])
+def convert_model_type():
+    try:
+        model_id = request.form.get("model-id")
+        new_type = request.form.get("type", "").strip().lower()  # Normalize input
+
+        if not model_id or not new_type:
+            return jsonify({"error": "model_id and type are required"}), 400
+
+        # Only allow "model" or "library"
+        allowed_types = {"model", "library"}
+        if new_type not in allowed_types:
+            return jsonify({"error": "Invalid type. Allowed values: 'model' or 'library'"}), 400
+
+        result = db.Models.update_one(
+            {"_id": ObjectId(model_id)},
+            {"$set": {"type": new_type, "last_updated": datetime.now()}}
+        )
+
+        if result.matched_count == 0:
+            return jsonify({"error": "No model found with the given ID"}), 404
+
+        return jsonify({"message": f"Successfully converted to type '{new_type}'"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/v1/delete/models", methods=["DELETE"])
 def delete_model():
