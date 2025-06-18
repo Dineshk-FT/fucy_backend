@@ -19,6 +19,8 @@ def hello():
 def get_Models():
     try:
         user_id = request.headers.get("user-id")
+        model_type = request.form.get("type")  # Optional: 'library' or 'model'
+         
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -26,12 +28,30 @@ def get_Models():
         if not user:
             return jsonify({"error": "No such user found"}), 404
 
-        data = list(db.Models.find({"user_id": user_id, "status": 1}))
+        if model_type == "library":
+            query = {
+                "user_id": user_id,
+                "status": 1,
+                "type": "library"
+            }
+        else:
+            # Default case: get models with type 'model' or no type at all
+            query = {
+                "user_id": user_id,
+                "status": 1,
+                "$or": [
+                    {"type": {"$exists": False}},
+                    {"type": "model"}
+                ]
+            }
+
+        data = list(db.Models.find(query))
 
         for item in data:
             item["_id"] = str(item["_id"])
 
         return jsonify(data), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -118,23 +138,6 @@ def get_unique_model():
         return jsonify({"error": str(e)}), 500
 
 
-# @app.route("/v1/get_details/model", methods=["POST"])
-# def get_unique_model():
-#     try:
-#         model_id = request.form.get("model-id")
-
-#         if not model_id or not re.match(r"^[0-9a-fA-F]{24}$", model_id):
-#             return jsonify({"error": "Invalid or missing model ID"}), 400
-
-#         model = db.Models.find_one({"_id": ObjectId(model_id)})
-#         if model:
-#             model["_id"] = str(model["_id"])
-#             return jsonify(model), 200
-#         else:
-#             return jsonify({"error": "model not found"}), 404
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/v1/update/model-name", methods=["POST"])
 def update_model_name():
@@ -150,12 +153,14 @@ def update_model_name():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/v1/add/models", methods=["POST"], endpoint="add_Models")
-def add_Models():
+@app.route("/v1/add/models", methods=["POST"])
+def add_Model_or_Library():
     try:
         user_id = request.headers.get("user-id")
         current = datetime.now()
         created_by = request.form.get("createdBy")
+        name = request.form.get("name")
+        model_type = request.form.get("type", "model").lower()  # Default to "model" if not provided
 
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
@@ -164,17 +169,20 @@ def add_Models():
         if not user:
             return jsonify({"error": "No such user found"}), 404
 
-        name = request.form.get("name")
         if not created_by:
             return jsonify({"error": "Created user details required"}), 400
 
         if not name:
             return jsonify({"error": "Model name is required"}), 400
 
-        # Check if model with same name already exists for this user
-        existing_model = db.Models.find_one({"user_id": user_id, "name": name})
+        # Check if model with same name and type already exists for this user
+        existing_model = db.Models.find_one({
+            "user_id": user_id,
+            "name": name,
+            "type": model_type
+        })
         if existing_model:
-            return jsonify({"error": "Model with the same name already exists"}), 409
+            return jsonify({"error": f"{model_type.capitalize()} with the same name already exists"}), 409
 
         data = {
             "user_id": user_id,
@@ -184,15 +192,12 @@ def add_Models():
             "Created_at": current,
             "last_updated": current,
             "status": 1,
-            # "config_id": ""
+            "type": model_type  # Either 'model' or 'library'
         }
 
         result = db.Models.insert_one(data)
 
-        return (
-            jsonify({"model_id": str(result.inserted_id)}),
-            201,
-        )
+        return jsonify({"model_id": str(result.inserted_id)}), 201
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
