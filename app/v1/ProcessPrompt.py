@@ -31,7 +31,7 @@ def create_attack_tree(attack_data):
         "data": {
             "connections": [],
             "label": f"{attack_data['Attack']}",
-            "nodeId": root_id,
+            # "nodeId": root_id,
             "style": {
                 "backgroundColor": "transparent",
                 "borderColor": "black",
@@ -117,7 +117,7 @@ def create_attack_tree(attack_data):
             "data": {
                 "connections": [],
                 "label": f"{sub_attack_name}",
-                "nodeId": sub_attack_id,
+                # "nodeId": sub_attack_id,
                 "style": {
                     "backgroundColor": "transparent",
                     "borderColor": "black",
@@ -211,7 +211,7 @@ def create_attack_tree(attack_data):
                 "data": {
                     "connections": [],
                     "label": child["name"],
-                    "nodeId": sub_attack_id,
+                    # "nodeId": sub_attack_id,
                     "style": {
                         "backgroundColor": "transparent",
                         "borderColor": "black",
