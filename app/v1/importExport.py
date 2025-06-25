@@ -239,3 +239,77 @@ def import_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/v1/cloneModelOrLibrary', methods=['POST'])
+def clone_model_or_library():
+    try:
+        key_id = request.form.get('keyId')
+        source = request.form.get('source')  
+        user_id = request.form.get('userId')  
+
+        if not key_id or not source:
+            return jsonify({'error': 'keyId and source are required'}), 400
+
+        source = source.lower()
+        if source not in ['model', 'library']:
+            return jsonify({'error': 'Invalid source value: must be "model" or "library"'}), 400
+
+        if source == 'library' and not user_id:
+            return jsonify({'error': 'userId is required when copying from library to model'}), 400
+
+        source_collection = 'Models' if source == 'model' else 'Libraries'
+        target_collection = 'Libraries' if source == 'model' else 'Models'
+
+        related_collections = [
+            'Assets', 'Attacks', 'Cybersecurity',
+            'Damage_scenarios', 'Risk_treatment', 'Threat_scenarios'
+        ]
+
+        model_id_object = ObjectId(key_id)
+        new_root_id = str(ObjectId())
+
+        # Step 1: Fetch and duplicate root doc (Models or Libraries)
+        root_doc = db[source_collection].find_one({'_id': model_id_object})
+        if not root_doc:
+            return jsonify({'error': f'No document found in {source_collection} with given ID'}), 404
+
+        root_doc.pop('_id', None)
+        root_doc['_id'] = ObjectId(new_root_id)
+        if target_collection == 'Models':
+            root_doc['user_id'] = user_id  # Only assign user_id when saving into Models
+
+        model_name = root_doc.get('name')
+        db[target_collection].insert_one(root_doc)
+
+        # Step 2: Duplicate all associated collection documents
+        for collection_name in related_collections:
+            related_docs = db[collection_name].find({'model_id': key_id})
+            for doc in related_docs:
+                doc.pop('_id', None)
+                doc['model_id'] = new_root_id
+                if target_collection == 'Models':
+                    doc['user_id'] = user_id
+                db[collection_name].insert_one(doc)
+
+        return jsonify({
+            'message': f'Successfully copied from {source_collection} to {target_collection}',
+            'new_id': new_root_id,
+            'name': model_name,
+            'target': target_collection
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/v1/listLibraries', methods=['GET'])
+def list_libraries():
+    try:
+        libraries = list(db['Libraries'].find({}, {'_id': 1, 'name': 1}))
+
+        # Convert ObjectId to string
+        for lib in libraries:
+            lib['_id'] = str(lib['_id'])
+
+        return jsonify(libraries), 200
+
+    except Exception as e:
+        return jsonify({'error':str(e)}),500
