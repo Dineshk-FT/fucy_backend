@@ -342,6 +342,7 @@ def update_name_desc():
         detail_id = request.form.get("detailId")
         name = request.form.get("Name")
         description = request.form.get("Description")
+        justification = request.form.get("justification")
 
         # Basic validation before JSON parsing
         if not scenario_id or not detail_id:
@@ -372,6 +373,8 @@ def update_name_desc():
             update_data["Details.$[elem].Name"] = name
         if description:
             update_data["Details.$[elem].Description"] = description
+        if justification:
+            update_data["Details.$[elem].impact_justification"] = justification  
 
         # Update Damage_scenarios collection
         result = db.Damage_scenarios.update_one(
