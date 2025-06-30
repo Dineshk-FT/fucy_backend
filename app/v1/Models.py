@@ -85,9 +85,14 @@ def get_unique_model():
         if not model_id or not re.match(r"^[0-9a-fA-F]{24}$", model_id):
             return jsonify({"error": "Invalid or missing model ID"}), 400
 
+        # Try to find in Models first
         master_model = db.Models.find_one({"_id": ObjectId(model_id)})
+
+        # If not found in Models, try Libraries
         if not master_model:
-            return jsonify({"error": "model not found"}), 404
+            master_model = db.Libraries.find_one({"_id": ObjectId(model_id)})
+            if not master_model:
+                return jsonify({"error": "Model not found in Models or Libraries"}), 404
 
         master_model["_id"] = str(master_model["_id"])
 
@@ -134,10 +139,9 @@ def get_unique_model():
         master_model["sub_models"] = sub_models
 
         return jsonify(master_model), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 
 @app.route("/v1/update/model-name", methods=["POST"])
 def update_model_name():
