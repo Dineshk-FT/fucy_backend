@@ -313,3 +313,47 @@ def list_libraries():
 
     except Exception as e:
         return jsonify({'error':str(e)}),500
+    
+@app.route('/v1/cloneModelDataToExistingModel', methods=['POST'])
+def clone_model_data_to_existing_model():
+    try:
+        source_model_id = request.form.get('sourceModelId')
+        target_model_id = request.form.get('targetModelId')
+        user_id = request.form.get('userId')
+
+        if not source_model_id or not target_model_id or not user_id:
+            return jsonify({'error': 'sourceModelId, targetModelId, and userId are required'}), 400
+
+        related_collections = [
+            'Assets', 'Attacks', 'Cybersecurity',
+            'Damage_scenarios', 'Risk_treatment', 'Threat_scenarios'
+        ]
+
+        source_model_exists = db['Models'].find_one({
+            '_id': ObjectId(target_model_id),
+            'user_id': user_id
+        })
+        if not source_model_exists:
+            return jsonify({'error': 'Model does not exist or does not belong to provided userId'}), 404
+
+        target_model_exists = db['Models'].find_one({'_id': ObjectId(target_model_id)})
+        if not target_model_exists:
+            return jsonify({'error': 'Target model does not exist'}), 404
+
+        for collection_name in related_collections:
+            related_docs = db[collection_name].find({'model_id': source_model_id})
+            
+            for doc in related_docs:
+                doc.pop('_id', None)  
+                doc['model_id'] = target_model_id  
+                
+                db[collection_name].insert_one(doc)
+
+        return jsonify({
+            'message': 'Successfully cloned data from source model to target model (data remains in both models)',
+            'source_model_id': source_model_id,
+            'target_model_id': target_model_id
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error':str(e)}),500

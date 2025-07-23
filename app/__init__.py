@@ -4,11 +4,28 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from flask_cors import CORS
+from flask_mail import Mail, Message
 
 app = Flask(__name__)
 CORS(app)
 
 mongo = PyMongo()
+
+
+# Example Flask config
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = 'dinesh.ravi.kumar115@gmail.com'
+app.config['MAIL_PASSWORD'] = 'ogvi pzkl oxld eyib'
+app.config['MAIL_DEFAULT_SENDER'] = 'dinesh.ravi.kumar115@gmail.com'
+
+mail = Mail(app)
+
+def send_email(to, subject, body):
+    msg = Message(subject, recipients=[to], body=body)
+    mail.send(msg)
+
 
 
 def create_app():
@@ -120,5 +137,9 @@ def create_app():
     from app.v1.guides import guides as guide
     
     app.register_blueprint(guide)
+    
+    from app.v1.ModelPrompt import modelprompt as modelprompt
+    
+    app.register_blueprint(modelprompt)
 
     return app
