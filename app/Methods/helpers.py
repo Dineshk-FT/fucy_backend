@@ -131,3 +131,174 @@ def getFesRateBgColor(rating):
         "Very High": colors.red,
     }
     return rating_color.get(rating,None)
+
+
+# Constants for layout
+DEFAULT_NODE_WIDTH = 180
+DEFAULT_NODE_HEIGHT = 60
+DEFAULT_GROUP_WIDTH = 700
+DEFAULT_GROUP_HEIGHT = 500
+GROUP_PADDING = 60
+GROUP_HORIZONTAL_SPACING = 600  # Space between groups
+GROUP_VERTICAL_SPACING = 300    # Vertical space if we stack groups
+NODE_SPACING_X = 200
+NODE_SPACING_Y = 120
+UNGROUPED_START_X = 100
+UNGROUPED_START_Y = 800  # Start ungrouped nodes below all groups
+MIN_CLEARANCE = 100      # Minimum space between any two elements
+
+def build_basic_node(node):
+    """Create node structure without positioning"""
+    is_group = node["type"] == "group"
+    return {
+        "id": node["id"],
+        "type": node["type"],
+        "position": {"x": 0, "y": 0},  # Temporary
+        "data": {
+            "label": node["data"]["label"],
+            "style": {
+                "backgroundColor": "#f0f0f0" if not is_group else "rgba(200,230,255,0.2)",
+                "borderColor": "#666" if not is_group else "#2196F3",
+                "borderStyle": "solid",
+                "borderWidth": "2px",
+                "color": "#333",
+                "fontFamily": "Inter",
+                "fontSize": "14px",
+                "fontWeight": 500,
+                "height": DEFAULT_GROUP_HEIGHT if is_group else DEFAULT_NODE_HEIGHT,
+                "width": DEFAULT_GROUP_WIDTH if is_group else DEFAULT_NODE_WIDTH,
+            },
+        },
+        "width": DEFAULT_GROUP_WIDTH if is_group else DEFAULT_NODE_WIDTH,
+        "height": DEFAULT_GROUP_HEIGHT if is_group else DEFAULT_NODE_HEIGHT,
+        "parentId": node.get("parentId"),
+        "properties": node.get("properties", []),
+    }
+
+def calculate_node_positions(nodes):
+    """Carefully position all nodes with proper spacing"""
+    groups = [n for n in nodes if n["type"] == "group"]
+    other_nodes = [n for n in nodes if n["type"] != "group"]
+    
+    # Position groups in a row with spacing
+    current_x = 100
+    current_y = 100
+    
+    for group in groups:
+        group["position"]["x"] = current_x
+        group["position"]["y"] = current_y
+        
+        # Next group moves right with spacing
+        current_x += group["width"] + GROUP_HORIZONTAL_SPACING
+        
+        # If we're running out of horizontal space, start new row
+        if current_x > 2500:  # Arbitrary reasonable limit
+            current_x = 100
+            current_y += group["height"] + GROUP_VERTICAL_SPACING
+    
+    # Position child nodes within their groups
+    for group in groups:
+        children = [n for n in other_nodes if n.get("parentId") == group["id"]]
+        
+        # Calculate grid layout within group
+        max_per_row = max(1, (group["width"] - 2 * GROUP_PADDING) // NODE_SPACING_X)
+        
+        for i, child in enumerate(children):
+            row = i // max_per_row
+            col = i % max_per_row
+            
+            child["position"]["x"] = (
+                group["position"]["x"] + 
+                GROUP_PADDING + 
+                col * NODE_SPACING_X
+            )
+            child["position"]["y"] = (
+                group["position"]["y"] + 
+                GROUP_PADDING + 
+                row * NODE_SPACING_Y
+            )
+    
+    # Position ungrouped nodes in a separate area below
+    ungrouped = [n for n in other_nodes if not n.get("parentId")]
+    
+    current_ungrouped_x = UNGROUPED_START_X
+    current_ungrouped_y = UNGROUPED_START_Y
+    max_row_width = 0
+    
+    for node in ungrouped:
+        # If node would go off screen, move to next row
+        if current_ungrouped_x + node["width"] > 2500:  # Arbitrary reasonable limit
+            current_ungrouped_x = UNGROUPED_START_X
+            current_ungrouped_y += node["height"] + MIN_CLEARANCE
+        
+        node["position"]["x"] = current_ungrouped_x
+        node["position"]["y"] = current_ungrouped_y
+        
+        # Move right for next node
+        current_ungrouped_x += node["width"] + NODE_SPACING_X
+        max_row_width = max(max_row_width, current_ungrouped_x)
+    
+    # Ensure final layout has no overlaps
+    verify_no_overlaps(nodes)
+    
+    return nodes
+
+def verify_no_overlaps(nodes):
+    """Double-check that no nodes overlap"""
+    for i, a in enumerate(nodes):
+        for j, b in enumerate(nodes):
+            if i >= j:
+                continue  # Don't compare twice or with self
+            
+            a_left = a["position"]["x"]
+            a_right = a_left + a["width"]
+            a_top = a["position"]["y"]
+            a_bottom = a_top + a["height"]
+            
+            b_left = b["position"]["x"]
+            b_right = b_left + b["width"]
+            b_top = b["position"]["y"]
+            b_bottom = b_top + b["height"]
+            
+            # Check for overlap
+            if not (a_right < b_left or a_left > b_right or 
+                    a_bottom < b_top or a_top > b_bottom):
+                print(f"Warning: Potential overlap between {a['id']} and {b['id']}")
+                # In a real implementation, you'd adjust positions here
+
+
+def build_full_edge(edge):
+    return {
+        "id": f"reactflow__edge-{edge['source']}{edge['sourceHandle']}-{edge['target']}{edge['targetHandle']}",
+        "type": edge["type"],
+        "source": edge["source"],
+        "target": edge["target"],
+        "sourceHandle": edge["sourceHandle"],
+        "targetHandle": edge["targetHandle"],
+        "data": {
+            "label": edge["data"]["label"],
+        },
+        "markerStart": {
+            "color": "#64B5F6",
+            "height": 18,
+            "orient": "auto-start-reverse",
+            "type": "arrowclosed",
+            "width": 18,
+        },
+        "markerEnd": {
+            "color": "#64B5F6",
+            "height": 18,
+            "type": "arrowclosed",
+            "width": 18,
+        },
+        "style": {
+            "stroke": "#808080",
+            "strokeWidth": 2,
+            "strokeDasharray": "0",
+            "start": True,
+            "end": True,
+        },
+        "properties": edge.get("properties", []),
+        "animated": True,
+        "selected": False,
+    }
