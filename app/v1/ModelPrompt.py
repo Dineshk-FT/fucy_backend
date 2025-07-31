@@ -6,13 +6,17 @@ import json
 import re
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions
+import random
+import uuid
+import string
+from collections import defaultdict
 
 modelprompt = Blueprint("modelprompt", __name__)
 
 genai.configure(api_key=Config.GOOGLE_API_KEY)
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 @modelprompt.route('/v1/create-model', methods=['POST'])
-
 def generate_reactflow_template():
     try:
         # 🔹 1️⃣ Get inputs
@@ -35,6 +39,7 @@ Cell Chemistry: {cell_chemistry}
 Include:
   - Nodes must have: id, type ("default" or "group"), data.label, properties.
   - Edges must have: id, type ("step"), source, target, sourceHandle, targetHandle, data.label, properties.
+  - Properties should contains only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
 
 Constraints:
   - If multiple related nodes exist, create at least one group node to contain them.
@@ -114,4 +119,226 @@ Example:
 
     except Exception as e:
         print(f"!! Final exception: {e}")
+        return jsonify({"error": str(e)}), 500
+    
+# Damage scene creation
+def generate_object_id():
+    """Generate MongoDB-style ObjectId"""
+    return ''.join(random.choices(string.hexdigits.lower(), k=24))
+
+
+@modelprompt.route('/v1/create-damage-scene', methods=['POST'])
+def generate_damage_scenarios(system_name, reactflow_template):
+    """Standalone endpoint to generate AI-powered damage scenarios"""
+    try:
+        # 1. Validate input
+        if not system_name or not reactflow_template:
+            return {"error": "System name and template are required"}, 400
+
+        # 2. Extract nodes and edges from template
+        nodes = reactflow_template.get("nodes", [])
+        edges = reactflow_template.get("edges", [])
+
+        if not nodes:
+            return {"error": "No nodes found in template"}, 400
+
+        # 3. Setup AI model
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        # 4. Create the AI prompt
+        prompt = f"""
+Generate exactly 2 damage scenarios for the '{system_name}' system in JSON format.
+Use ONLY the structure and fields shown in the example.
+
+System Components:
+{json.dumps(nodes, indent=2)}
+
+Relationships:
+{json.dumps(edges, indent=2)}
+
+Requirements:
+1. Create TWO different scenarios targeting different critical components
+2. Each MUST include:
+   - Realistic cyber losses (integrity/confidentiality/availability)
+   - Plausible impact ratings (Major/Moderate/Minor)
+   - References to actual node IDs from components
+3. Use EXACTLY this structure:
+{{
+  "system_name": "{system_name}",
+  "model_id": "generated_model_id",
+  "type": "User-defined",
+  "Details": [
+    {{
+      "Description": "scenario description",
+      "Name": "scenario name",
+      "cyberLosses": [
+        {{
+          "id": "uuid",
+          "name": "loss type",
+          "isSelected": true,
+          "node": "component name",
+          "nodeId": "component_id"
+        }}
+      ],
+      "impacts": {{
+        "Financial Impact": "rating",
+        "Safety Impact": "rating",
+        "Operational Impact": "rating",
+        "Privacy Impact": "rating"
+      }},
+      "key": 1,
+      "_id": "scenario_id"
+    }}
+  ]
+}}
+
+IMPORTANT:
+- Return ONLY valid JSON
+- Make scenarios specific to {system_name}
+- Use ACTUAL node IDs from components
+- Make impact ratings realistic
+"""
+
+        # 5. Get AI response
+        response = model.generate_content(prompt)
+        raw_output = response.text.strip()
+
+        # 6. Clean and parse the output
+        cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
+        scenarios = json.loads(cleaned)
+
+        # 7. Add system context and generated IDs
+        scenarios["system_name"] = system_name
+        scenarios["_id"] = {"$oid": generate_object_id()}
+        scenarios["model_id"] = scenarios.get("model_id", generate_object_id())
+
+        for i, detail in enumerate(scenarios.get("Details", []), start=1):
+            detail["_id"] = detail.get("_id", str(uuid.uuid4()))
+            detail["key"] = detail.get("key", i)
+            detail["impact_justification"] = detail.get("impact_justification", "")
+
+            for loss in detail.get("cyberLosses", []):
+                loss["id"] = loss.get("id", str(uuid.uuid4()))
+                loss["is_risk_added"] = loss.get("is_risk_added", False)
+                loss["isSelected"] = loss.get("isSelected", True)
+
+        return scenarios, 200
+
+    except json.JSONDecodeError:
+        return {"error": "Failed to parse AI response"}, 500
+    except Exception as e:
+        return {"error": f"Scenario generation failed: {str(e)}"}, 500
+
+
+# Wrapper Flask endpoint
+@modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
+def create_damage_scenarios():
+    try:
+        system_name = request.form.get('systemName', "")
+        template_raw = request.form.get('template', {})
+
+        if not template_raw:
+            return jsonify({"error": "Missing template"}), 400
+
+        template = json.loads(template_raw)
+
+        # Generate scenarios
+        scenarios, status_code = generate_damage_scenarios(system_name, template)
+        return jsonify(scenarios), status_code
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+#threat creation
+def extract_json_from_text(text):
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        return text.strip()
+    except Exception:
+        return text.strip()
+
+
+def group_threats_by_node(threat_ids):
+    grouped = defaultdict(list)
+    for threat in threat_ids:
+        key = threat['nodeId']
+        grouped[key].append(threat)
+    return grouped
+
+
+def generate_single_derived_scenario(threat_group):
+    prompt = f"""
+You are a cybersecurity expert. Based on the following related threats, generate a meaningful name and a concise description for a derived threat scenario. Do not use generic names like "Derived Threat Scenario".
+
+Here are the threats:
+{json.dumps(threat_group, indent=2)}
+
+Each threat includes:
+- `nodeId`: the component or function
+- `propId`: the impacted property (can be ignored)
+- `rowId`: the related damage scenario
+
+Return only a JSON object with:
+- name: (string)
+- description: (string)
+"""
+    gemini_response = model.generate_content(prompt)
+
+    try:
+        content_text = (
+            gemini_response.text
+            if hasattr(gemini_response, 'text')
+            else gemini_response.candidates[0].content.parts[0].text
+        )
+        cleaned = extract_json_from_text(content_text)
+        return json.loads(cleaned)
+    except Exception as e:
+        print("Gemini Output:", gemini_response)
+        raise ValueError(f"Failed to parse Gemini response: {str(e)}")
+
+
+@modelprompt.route('/v1/generate/derived-threat-scenarios', methods=['POST'])
+def create_derived_threat_scenario():
+    try:
+        name = request.form.get('name', "")
+        description = request.form.get('description', "")
+        model_id = request.form.get('modelId', "")
+        threat_ids_raw = request.form.get('threatIds', "[]")
+
+        threat_ids = json.loads(threat_ids_raw)
+
+        if not model_id or not threat_ids:
+            return jsonify({"error": "Missing modelId or threatIds"}), 400
+
+        results = []
+
+        # Manual override (single scenario)
+        if name or description:
+            results.append({
+                "id": str(uuid.uuid4()),
+                "name": name or "Unnamed Derived Threat",
+                "description": description or "",
+                "model_id": model_id,
+                "threat_ids": threat_ids,
+                "type": "User-defined"
+            })
+        else:
+            grouped = group_threats_by_node(threat_ids)
+            for group in grouped.values():
+                result = generate_single_derived_scenario(group)
+                results.append({
+                    "id": str(uuid.uuid4()),
+                    "name": result.get("name", "Unnamed Derived Threat"),
+                    "description": result.get("description", ""),
+                    "model_id": model_id,
+                    "threat_ids": group,
+                    "type": "User-defined"
+                })
+
+        return jsonify(results), 201
+
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
