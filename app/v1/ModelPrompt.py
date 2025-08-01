@@ -4,6 +4,7 @@ from config import Config
 import ast
 import json
 import re
+from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions
 import random
@@ -339,6 +340,115 @@ def create_derived_threat_scenario():
                 })
 
         return jsonify(results), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# generate Attack Tree
+def preprocess_threat_scenarios(threat_scenarios):
+    """
+    Flattens the Details in each threat scenario so Gemini can see scenario names and nodes clearly.
+    Returns a list of dicts with rowId, scenario_name, node, nodeId, and properties.
+    """
+    processed = []
+    for scenario in threat_scenarios:
+        for detail in scenario.get("Details", []):
+            row_id = detail.get("rowId")
+            for d in detail.get("Details", []):
+                processed.append({
+                    "rowId": row_id,
+                    "scenario_name": d.get("name", ""),
+                    "node": d.get("node", ""),
+                    "nodeId": d.get("nodeId", ""),
+                    "properties": [p.get("name") for p in d.get("props", [])]
+                })
+    return processed
+
+def generate_attack_trees_with_gemini(threat_scenarios, model_id):
+    """
+    Given a list of threat_scenarios and a model_id, call Gemini to generate attack trees.
+    Returns the parsed attack tree data (dict).
+    """
+    prompt = f"""
+You are an expert in cyber threat modeling. Given the following derived threat scenarios, select the top 2 most critical scenarios and generate attack trees for each.
+Each scenario includes:
+- scenario_name: the name of the scenario
+- node: the main component or function
+- nodeId: the component's unique ID
+- properties: impacted properties (e.g., Integrity, Availability)
+- rowId: unique scenario identifier
+
+Return the result in the following JSON format (one scene per scenario):
+
+{{
+  "model_id": "{model_id}",
+  "type": "attack_trees",
+  "scenes": [
+    {{
+      "ID": "uuid",
+      "Name": "Attack Tree Name",
+      "threat_id": "rowId from scenario",
+      "templates": {{
+        "nodes": [ ... ],
+        "edges": [ ... ]
+      }}
+    }}
+  ]
+}}
+
+Here are the threat scenarios:
+{json.dumps(threat_scenarios, default=str, indent=2)}
+
+IMPORTANT:
+- Use the actual rowId from the scenario as threat_id.
+- Use scenario_name and node for context.
+- Generate realistic nodes and edges for the attack tree.
+- Return ONLY valid JSON.
+"""
+    gemini_response = model.generate_content(prompt)
+    try:
+        content_text = (
+            gemini_response.text
+            if hasattr(gemini_response, 'text')
+            else gemini_response.candidates[0].content.parts[0].text
+        )
+        cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
+        return json.loads(cleaned)
+    except Exception as e:
+        print("Gemini Output:", gemini_response)
+        raise ValueError(f"Failed to parse Gemini attack tree response: {str(e)}")
+
+
+@modelprompt.route('/v1/generate/attack-tree', methods=['POST'])
+def generate_attack_tree():
+    try:
+        # 1. Get model_id from request
+        model_id = request.form.get('modelId', '')
+        if not model_id:
+            return jsonify({"error": "Missing modelId"}), 400
+
+        # 2. Fetch all derived threat scenarios for this model_id
+        threat_scenarios = list(
+            db.Threat_scenarios.find({
+                "model_id": model_id,
+                "type": "derived"
+            })
+        )
+
+        if not threat_scenarios:
+            return jsonify({"error": "No derived threat scenarios found"}), 404
+
+        # 3. Preprocess for Gemini
+        processed_scenarios = preprocess_threat_scenarios(threat_scenarios)
+
+        # 4. Generate attack trees using Gemini
+        try:
+            attack_tree_data = generate_attack_trees_with_gemini(processed_scenarios, model_id)
+        except Exception as e:
+            return jsonify({"error": f"Failed to generate attack trees: {str(e)}"}), 500
+
+        # 5. Return the generated attack trees (do not save yet)
+        return jsonify(attack_tree_data), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
