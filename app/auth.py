@@ -7,7 +7,20 @@ from flask import Blueprint
 from datetime import datetime, timedelta
 from bson import ObjectId
 import random
-from app.__init__ import   send_email
+import string
+from app.__init__ import send_email
+
+def generate_license_key():
+    """Generate a unique license key in the format: XXXX-XXXX-XXXX-XXXX"""
+    chars = string.ascii_uppercase + string.digits
+    while True:
+        key = '-'.join(
+            ''.join(random.choices(chars, k=4)) 
+            for _ in range(4)
+        )
+        # Ensure the key is unique
+        if not db.accounts.find_one({"license_key": key}):
+            return key
 
 app = Blueprint("auth", __name__)
 
@@ -73,6 +86,9 @@ def register():
         start_date = datetime.utcnow()
         end_date = start_date + timedelta(days=duration_mapping[license_type])
 
+        # Generate unique license key
+        license_key = generate_license_key()
+        
         # Create user
         db.accounts.insert_one({
             "firstname": firstname,
@@ -83,11 +99,15 @@ def register():
             "password": hashed_password,
             "role": role,
             "license_type": license_type,
+            "license_key": license_key,
             "license_start": start_date,
             "license_end": end_date
         })
 
-        return jsonify({"message": f"User registered successfully with {license_type} license!"}), 201
+        return jsonify({
+            "message": f"User registered successfully with {license_type} license!",
+            "license_key": license_key
+        }), 201
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -279,26 +299,29 @@ def login():
             return jsonify({"error": "Invalid username or password"}), 401
 
         user_type = user.get("user_type")
-        organization = user.get("organization")
+        organization = user.get("org", "")  # Using org instead of organization
         license_end = user.get("license_end")
         current_date = datetime.utcnow()
+        is_admin = user_type == "admin"
 
         # Check if license is valid
         license_status = "active"
-        if license_end and current_date > license_end:
-            license_status = "expired"
+        if not is_admin:  # Skip license check for admins
+            if not license_end:
+                license_status = "inactive"
+            elif current_date > license_end:
+                license_status = "expired"
 
-        # 1️⃣ NEW CONDITION:
         # If the user is NOT an admin AND (has no license OR license expired) AND has no organization -> block login.
-        if user_type != "admin":
-            if (not license_end or license_status == "expired") and not organization:
+        if not is_admin:
+            if license_status in ["inactive", "expired"] and not organization:
                 return jsonify({
                     "error": "Access denied. No valid license and no organization assigned.",
                     "license_status": license_status
                 }), 403
 
-        # If license is expired, prompt for upgrade (unless admin)
-        if license_status == "expired" and user_type != "admin":
+        # If license is invalid, prompt for upgrade (unless admin)
+        if license_status in ["inactive", "expired"] and not is_admin:
             return jsonify({
                 "error": "License expired. Please upgrade to continue.",
                 "license_status": license_status
@@ -321,6 +344,7 @@ def login():
                     "user-id": token,
                     "username": user["username"],
                     "license_type": user.get("license_type"),
+                    "license_key": user.get("license_key"),
                     "license_start": str(user.get("license_start")),
                     "license_end": str(user.get("license_end")),
                     "license_status": license_status
