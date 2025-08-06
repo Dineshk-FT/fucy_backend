@@ -104,6 +104,98 @@ def register():
             "license_end": end_date
         })
 
+        # Send email with license key
+        email_subject = "🎉 Welcome to FUCY TECH - Your License Key"
+        email_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333333;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                .header {{
+                    background-color: #4a6fa5;
+                    color: white;
+                    padding: 20px;
+                    text-align: center;
+                    border-radius: 5px 5px 0 0;
+                }}
+                .content {{
+                    padding: 20px;
+                    border: 1px solid #e0e0e0;
+                    border-top: none;
+                    border-radius: 0 0 5px 5px;
+                }}
+                .license-box {{
+                    background-color: #f8f9fa;
+                    border-left: 4px solid #4a6fa5;
+                    padding: 15px;
+                    margin: 20px 0;
+                    font-family: monospace;
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    padding-top: 20px;
+                    border-top: 1px solid #e0e0e0;
+                    font-size: 0.9em;
+                    color: #666666;
+                }}
+                .btn {{
+                    display: inline-block;
+                    padding: 10px 20px;
+                    background-color: #4a6fa5;
+                    color: white !important;
+                    text-decoration: none;
+                    border-radius: 4px;
+                    margin: 10px 0;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h2>Welcome to FUCY TECH!</h2>
+            </div>
+            <div class="content">
+                <p>Dear {firstname} {lastname},</p>
+                
+                <p>Thank you for registering with FUCY TECH! We're excited to have you on board.</p>
+                
+                <div class="license-box">
+                    <p><strong>Your License Key:</strong><br>
+                    <span style="font-size: 1.2em; font-weight: bold; color: #2c3e50;">{license_key}</span></p>
+                    
+                    <p><strong>License Type:</strong> {license_type}<br>
+                    <strong>Valid Until:</strong> {end_date.strftime('%B %d, %Y')}</p>
+                </div>
+                
+                <p>Please keep this license key safe, as it will be required to access your account and our services.</p>
+                
+                <p>If you have any questions or need assistance, please don't hesitate to contact our support team.</p>
+                
+                <div class="footer">
+                    <p>Best regards,<br>
+                    <strong>The FUCY TECH Team</strong></p>
+                    
+                    <p style="font-size: 0.8em; margin-top: 20px; color: #999999;">
+                        This is an automated message, please do not reply directly to this email.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        try:
+            send_email(email, email_subject, email_body, is_html=True)
+        except Exception as e:
+            # Log email failure but don't fail registration
+            print(f"Failed to send email: {str(e)}")
+
         return jsonify({
             "message": f"User registered successfully with {license_type} license!",
             "license_key": license_key

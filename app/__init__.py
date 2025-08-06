@@ -22,8 +22,12 @@ app.config['MAIL_DEFAULT_SENDER'] = 'dinesh.ravi.kumar115@gmail.com'
 
 mail = Mail(app)
 
-def send_email(to, subject, body):
-    msg = Message(subject, recipients=[to], body=body)
+def send_email(to, subject, body, is_html=False):
+    if is_html:
+        msg = Message(subject, recipients=[to])
+        msg.html = body
+    else:
+        msg = Message(subject, recipients=[to], body=body)
     mail.send(msg)
 
 
