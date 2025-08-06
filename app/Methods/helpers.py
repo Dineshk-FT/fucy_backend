@@ -10,7 +10,7 @@ from azure.storage.blob import (
 from reportlab.lib import colors
 from config import Config
 import datetime
-
+import uuid
 
 def get_highest_impact(impacts):
     # impact_order = ["Severe", "Major", "Moderate", "Minor", "Negligible"]
@@ -301,4 +301,153 @@ def build_full_edge(edge):
         "properties": edge.get("properties", []),
         "animated": True,
         "selected": False,
+    }
+
+
+
+def structure_attack_tree_templates(raw_templates):
+    """
+    Structure attack tree: default -> individual OR gates -> events
+    Injects a unique gate between root and every event node.
+    """
+    nodes = raw_templates.get("nodes", [])
+    edges = raw_templates.get("edges", [])
+
+    # Find the root node
+    root_node = next((n for n in nodes if n.get("type", "").lower() == "default"), None)
+    if not root_node:
+        raise ValueError("No root node (type='default') found")
+
+    # Remaining nodes are events
+    event_nodes = [n for n in nodes if n != root_node]
+
+    structured_nodes = []
+    structured_edges = []
+
+    # Base style for nodes
+    def style(width=120, height=60):
+        return {
+            "fontSize": "16px",
+            "fontFamily": "Inter",
+            "fontStyle": "normal",
+            "fontWeight": 500,
+            "textAlign": "center",
+            "color": "black",
+            "textDecoration": "none",
+            "borderColor": "black",
+            "borderWidth": "2px",
+            "borderStyle": "solid",
+            "backgroundColor": "transparent",
+            "width": width,
+            "height": height
+        }
+
+    # Add root node
+    root_structured = {
+        "id": root_node["id"],
+        "position": {"x": 300, "y": 32},
+        "type": "default",
+        "label": root_node.get("label", root_node.get("name", "Root")),
+        "dragged": True,
+        "nodeId": root_node.get("nodeId", ""),
+        "threatId": root_node.get("threat_id", ""),
+        "damageId": root_node.get("damageId", ""),
+        "width": 150,
+        "height": 60,
+        "key": root_node.get("key", ""),
+        "data": {
+            "label": root_node.get("label", root_node.get("name", "Root")),
+            "nodeId": root_node.get("nodeId", ""),
+            "style": style(150, 60),
+            "connections": []  # will be filled below
+        }
+    }
+    structured_nodes.append(root_structured)
+
+    # Build gate + event for each event node
+    for i, event in enumerate(event_nodes):
+        event_id = event["id"]
+        gate_id = str(uuid.uuid4())
+
+        gate_x = 100 + i * 250
+        gate_y = 150
+        event_y = 270
+
+        # Add OR Gate node
+        gate_node = {
+            "id": gate_id,
+            "position": {"x": gate_x, "y": gate_y},
+            "type": "OR Gate",
+            "label": "OR Gate",
+            "width": 100,
+            "height": 100,
+            "data": {
+                "label": "OR Gate",
+                "style": style(120, 60),
+                "connections": [{
+                    "id": event_id,
+                    "type": "Event"
+                }]
+            },
+            "selected": False,
+            "dragging": False
+        }
+        structured_nodes.append(gate_node)
+
+        # Add Event node
+        event_node = {
+            "id": event_id,
+            "position": {"x": gate_x, "y": event_y},
+            "type": "Event",
+            "label": event.get("label", event.get("name", "Event")),
+            "width": 198,
+            "height": 60,
+            "data": {
+                "label": event.get("label", event.get("name", "Event")),
+                "style": style(120, 60)
+            },
+            "selected": True,
+            "dragging": False
+        }
+        structured_nodes.append(event_node)
+
+        # Add gate connection to event
+        structured_edges.append({
+            "id": f"{gate_id}-{event_id}",
+            "source": gate_id,
+            "target": event_id,
+            "type": "step",
+            "markerEnd": {
+                "type": "arrowclosed",
+                "width": 20,
+                "height": 20,
+                "color": "black"
+            },
+            "points": []
+        })
+
+        # Add root → gate connection
+        structured_edges.append({
+            "id": f"{root_node['id']}-{gate_id}",
+            "source": root_node["id"],
+            "target": gate_id,
+            "type": "step",
+            "markerEnd": {
+                "type": "arrowclosed",
+                "width": 20,
+                "height": 20,
+                "color": "black"
+            },
+            "points": []
+        })
+
+        # Update root node's connections
+        root_structured["data"]["connections"].append({
+            "id": gate_id,
+            "type": "OR Gate"
+        })
+
+    return {
+        "nodes": structured_nodes,
+        "edges": structured_edges
     }
