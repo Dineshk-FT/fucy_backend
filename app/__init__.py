@@ -5,21 +5,16 @@ from logging.handlers import RotatingFileHandler
 import os
 from flask_cors import CORS
 from flask_mail import Mail, Message
+from config import Config
 
 app = Flask(__name__)
 CORS(app)
 
+# Load configuration from config.py
+app.config.from_object(Config)
+
+# Initialize extensions
 mongo = PyMongo()
-
-
-# Example Flask config
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USERNAME'] = 'dinesh.ravi.kumar115@gmail.com'
-app.config['MAIL_PASSWORD'] = 'ogvi pzkl oxld eyib'
-app.config['MAIL_DEFAULT_SENDER'] = 'dinesh.ravi.kumar115@gmail.com'
-
 mail = Mail(app)
 
 def send_email(to, subject, body, is_html=False):
@@ -30,13 +25,8 @@ def send_email(to, subject, body, is_html=False):
         msg = Message(subject, recipients=[to], body=body)
     mail.send(msg)
 
-
-
 def create_app():
-    # app = Flask(__name__)
-    # app.config.from_object('config.Config')
-
-    # mongo.init_app(app)
+    # Configuration is now loaded from config.py
 
     log_dir = "logs"
     if not os.path.exists(log_dir):
@@ -75,12 +65,8 @@ def create_app():
         app.logger.error("Unhandled Exception: %s", e, exc_info=True)
         return "Internal Server Error", 500
 
-    # with app.app_context():
-    #     from . import routes,auth
-
-    from app.auth import app as auth
-
-    app.register_blueprint(auth)
+    from app.auth import auth
+    app.register_blueprint(auth)  # Removed url_prefix='/api'
 
     from app.routes import app as routes
 

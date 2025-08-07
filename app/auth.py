@@ -1,5 +1,4 @@
-from flask import current_app as app
-from flask import request, jsonify, json
+from flask import current_app, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import db
 import uuid
@@ -9,40 +8,97 @@ from bson import ObjectId
 import random
 import string
 from app.__init__ import send_email
+import stripe
 
 def generate_license_key():
-    """Generate a unique license key in the format: XXXX-XXXX-XXXX-XXXX"""
+    """Generate a unique license key in the format: XXXX-XXXX-XXXX-XXXX""" 
     chars = string.ascii_uppercase + string.digits
     while True:
         key = '-'.join(
             ''.join(random.choices(chars, k=4)) 
             for _ in range(4)
         )
-        # Ensure the key is unique
         if not db.accounts.find_one({"license_key": key}):
             return key
 
-app = Blueprint("auth", __name__)
+auth = Blueprint("auth", __name__)
 
-
-@app.route("/", methods=["GET"])
+@auth.route("/", methods=["GET"])
 def hello():
     return "WORKING SUCCESSFULLY"
 
-# Registration API
-@app.route("/register", methods=["POST"])
+@auth.route("/verify-card", methods=["POST"])
+def verify_card():
+    try:
+        if request.is_json:
+            data = request.get_json()
+            payment_method_id = data.get('payment_method_id')
+        else:
+            payment_method_id = request.form.get('payment_method_id')
+            
+        if not payment_method_id:
+            return jsonify({"error": "Payment method ID is required"}), 400
+        
+        try:
+            stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
+            if not stripe.api_key:
+                raise ValueError("Stripe API key is not configured")
+                
+            payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
+            
+            if payment_method.type == 'card':
+                return jsonify({
+                    "success": True, 
+                    "message": "Card verified successfully",
+                    "card": {
+                        "last4": payment_method.card.last4,
+                        "brand": payment_method.card.brand,
+                        "exp_month": payment_method.card.exp_month,
+                        "exp_year": payment_method.card.exp_year
+                    }
+                }), 200
+            else:
+                return jsonify({"error": "Invalid payment method type"}), 400
+                
+        except stripe.error.CardError as e:
+            current_app.logger.error(f"Card verification failed: {str(e)}")
+            return jsonify({"error": f"Card verification failed: {e.user_message if hasattr(e, 'user_message') else str(e)}"}), 400
+            
+        except stripe.error.StripeError as e:
+            current_app.logger.error(f"Stripe API error: {str(e)}")
+            return jsonify({"error": "An error occurred while processing your payment. Please try again."}), 500
+            
+    except Exception as e:
+        current_app.logger.error(f"Unexpected error in verify_card: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred. Please try again later."}), 500
+
+@auth.route("/register", methods=["POST"])
 def register():
     try:
         firstname = request.form.get("firstname")
         lastname = request.form.get("lastname")
         org = request.form.get("org")
         password = request.form.get("password")
-        license_type = request.form.get("license_type")  # 'trial', '1month', etc.
+        license_type = request.form.get("license_type")
         role = request.form.get("role")
-        email=request.form.get("email")
+        email = request.form.get("email")
+        payment_method_id = request.form.get("payment_method_id")
 
         if not all([firstname, lastname, org, password, role, email]):
-            return jsonify({"error": "All fields (firstname, lastname, org, password, role) are required"}), 400
+            return jsonify({"error": "All fields (firstname, lastname, org, password, role, email) are required"}), 400
+
+        if license_type != "trial":
+            if not payment_method_id:
+                return jsonify({"error": "Payment method ID is required for non-trial plans"}), 400
+            try:
+                stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
+                payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
+                if payment_method.type != 'card':
+                    return jsonify({"error": "Invalid payment method type"}), 400
+            except stripe.error.CardError as e:
+                return jsonify({"error": f"Card verification failed: {str(e)}"}), 400
+            except stripe.error.StripeError as e:
+                return jsonify({"error": f"Stripe error: {str(e)}"}), 500
 
         username = f"{firstname}.{lastname}".lower()
         existing_account = db.accounts.find_one({"email": email})
@@ -52,59 +108,37 @@ def register():
         if existing_account and existing_user and existing_org:
             return jsonify({"error": "User already has an account"}), 400
 
-        # Determine license durations
         duration_mapping = {
-            "trial": 14,        # 2 weeks trial
+            "trial": 14,
             "1month": 30,
             "3months": 90,
             "6months": 180,
             "1year": 365
         }
 
+        if license_type not in duration_mapping:
+            return jsonify({"error": "Invalid license type"}), 400
+
         hashed_password = generate_password_hash(password, method="pbkdf2:sha256")
-
-        # Check if user has already used trial license by email+org
-        existing_trial = db.accounts.find_one({
-            "firstname": firstname,
-            "lastname": lastname,
-            "email":email,
-            "org": org,
-            "license_type": "trial"
-        })
-
-        # If requested license_type is trial and they have used trial before, deny
-        if license_type == "trial" and existing_trial:
-            return jsonify({"error": "Trial license already used. Please choose a paid license."}), 400
-
-        # If no license_type provided or invalid, assign trial if not used before; else require paid
-        if not license_type or license_type not in duration_mapping:
-            if existing_trial:
-                return jsonify({"error": "Trial license already used. Please choose a paid license."}), 400
-            else:
-                license_type = "trial"
-
         start_date = datetime.utcnow()
         end_date = start_date + timedelta(days=duration_mapping[license_type])
-
-        # Generate unique license key
         license_key = generate_license_key()
-        
-        # Create user
+
         db.accounts.insert_one({
             "firstname": firstname,
             "lastname": lastname,
             "username": username,
-            "email":email,
+            "email": email,
             "org": org,
             "password": hashed_password,
             "role": role,
             "license_type": license_type,
             "license_key": license_key,
             "license_start": start_date,
-            "license_end": end_date
+            "license_end": end_date,
+            "payment_method_id": payment_method_id if license_type != "trial" else None
         })
 
-        # Send email with license key
         email_subject = "🎉 Welcome to FUCY TECH - Your License Key"
         email_body = f"""
         <!DOCTYPE html>
@@ -146,15 +180,6 @@ def register():
                     font-size: 0.9em;
                     color: #666666;
                 }}
-                .btn {{
-                    display: inline-block;
-                    padding: 10px 20px;
-                    background-color: #4a6fa5;
-                    color: white !important;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    margin: 10px 0;
-                }}
             </style>
         </head>
         <body>
@@ -163,25 +188,18 @@ def register():
             </div>
             <div class="content">
                 <p>Dear {firstname} {lastname},</p>
-                
                 <p>Thank you for registering with FUCY TECH! We're excited to have you on board.</p>
-                
                 <div class="license-box">
                     <p><strong>Your License Key:</strong><br>
                     <span style="font-size: 1.2em; font-weight: bold; color: #2c3e50;">{license_key}</span></p>
-                    
                     <p><strong>License Type:</strong> {license_type}<br>
                     <strong>Valid Until:</strong> {end_date.strftime('%B %d, %Y')}</p>
                 </div>
-                
                 <p>Please keep this license key safe, as it will be required to access your account and our services.</p>
-                
                 <p>If you have any questions or need assistance, please don't hesitate to contact our support team.</p>
-                
                 <div class="footer">
                     <p>Best regards,<br>
                     <strong>The FUCY TECH Team</strong></p>
-                    
                     <p style="font-size: 0.8em; margin-top: 20px; color: #999999;">
                         This is an automated message, please do not reply directly to this email.
                     </p>
@@ -193,269 +211,193 @@ def register():
         try:
             send_email(email, email_subject, email_body, is_html=True)
         except Exception as e:
-            # Log email failure but don't fail registration
-            print(f"Failed to send email: {str(e)}")
+            current_app.logger.error(f"Failed to send email: {str(e)}")
 
         return jsonify({
             "message": f"User registered successfully with {license_type} license!",
             "license_key": license_key
         }), 201
-
     except Exception as e:
+        current_app.logger.error(f"Error in register: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/check-user-status", methods=["POST"])
+@auth.route("/check-user-status", methods=["POST"])
 def check_user_status():
     try:
-        email = request.form.get("email")  # No lower() - case sensitive
-        org = request.form.get("org")      # No lower() - case sensitive
-
+        email = request.form.get("email")
+        org = request.form.get("org")
         if not email or not org:
             return jsonify({"error": "Email and Organization are required"}), 400
-
-        # First check if email exists in any organization (case sensitive)
         user_with_email = db.accounts.find_one({
-            "$or": [
-                {"email": email},  # Exact case match
-                {"username": email}  # Exact case match
-            ]
+            "$or": [{"email": email}, {"username": email}]
         })
-
         if not user_with_email:
-            return jsonify({
-                "exists": False,
-                "trialUsed": False,
-                "trialExpired": False,
-                "license_end": None,
-                "message": "User not found"
-            }), 200
-
-        # Check if this user exists in the specified organization (case sensitive)
-        user = db.accounts.find_one({
-            "$and": [
-                {"$or": [{"email": email}, {"username": email}]},
-                {"org": org}  # Exact case match
-            ]
-        })
-
+            return jsonify({"exists": False, "message": "User not found"}), 200
+        user = db.accounts.find_one({"email": email, "org": org})
         if not user:
-            return jsonify({
-                "exists": False,
-                "trialUsed": False,
-                "trialExpired": False,
-                "license_end": None,
-                "message": "User not found in this organization"
-            }), 200
-
-        # License check logic remains the same
-        if user.get("license_type") == "trial":
-            license_end = user.get("license_end")
-            current_time = datetime.utcnow()
-            
-            trial_expired = False
-            if license_end:
-                trial_expired = license_end < current_time
-
-            return jsonify({
-                "exists": True,
-                "trialUsed": True,
-                "trialExpired": trial_expired,
-                "license_end": license_end.isoformat() if license_end else None,
-                "message": "Valid trial license"
-            }), 200
-
+            return jsonify({"exists": False, "message": "User not found in this organization"}), 200
+        license_end = user.get("license_end")
+        trialUsed = user.get("license_type") == "trial"
+        trialExpired = trialUsed and license_end and license_end < datetime.utcnow()
         return jsonify({
             "exists": True,
-            "trialUsed": False,
-            "trialExpired": False,
-            "license_end": None,
-            "message": "Valid user with no trial license"
+            "trialUsed": trialUsed,
+            "trialExpired": trialExpired,
+            "license_end": license_end.isoformat() if license_end else None,
+            "message": "Valid trial license" if trialUsed else "Valid user with no trial license"
         }), 200
-
     except Exception as e:
+        current_app.logger.error(f"Error in check_user_status: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-
-@app.route("/send-verification-otp", methods=["POST"])
+@auth.route("/send-verification-otp", methods=["POST"])
 def send_verification_otp():
     try:
         email = request.form.get("email")
-        print("Email:", email)
         if not email:
             return jsonify({"error": "Email is required"}), 400
-
-        # Generate random 6-digit OTP
         otp = random.randint(100000, 999999)
-
         db.verification.insert_one({
             "email": email,
             "otp": str(otp),
             "expires_at": datetime.utcnow() + timedelta(minutes=10)
         })
-
         send_email(
             to=email,
             subject="Your Verification OTP",
             body=f"Your OTP is: {otp}. It expires in 10 minutes."
         )
-
         return jsonify({"message": "Verification OTP sent to email"}), 200
-
     except Exception as e:
-        print("❌ ERROR:", str(e))  # <-- SEE THE ERROR IN CONSOLE
+        current_app.logger.error(f"Error in send_verification_otp: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/verify-otp", methods=["POST"])
+@auth.route("/verify-otp", methods=["POST"])
 def verify_otp():
-    email = request.form.get("email")
-    otp = request.form.get("otp")
+    try:
+        email = request.form.get("email")
+        otp = request.form.get("otp")
+        if not email or not otp:
+            return jsonify({"error": "Email and OTP required"}), 400
+        record = db.verification.find_one({"email": email, "otp": otp})
+        if not record:
+            return jsonify({"error": "Invalid OTP"}), 400
+        if record["expires_at"] < datetime.utcnow():
+            return jsonify({"error": "OTP expired"}), 400
+        db.verification.delete_one({"_id": record["_id"]})
+        return jsonify({"message": "Email verified"}), 200
+    except Exception as e:
+        current_app.logger.error(f"Error in verify_otp: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-    if not email or not otp:
-        return jsonify({"error": "Email and OTP required"}), 400
-
-    record = db.verification.find_one({"email": email, "otp": otp})
-
-    if not record:
-        return jsonify({"error": "Invalid OTP"}), 400
-
-    if record["expires_at"] < datetime.utcnow():
-        return jsonify({"error": "OTP expired"}), 400
-
-    # Optionally mark as verified or remove OTP
-    db.verification.delete_one({"_id": record["_id"]})
-
-    return jsonify({"message": "Email verified"}), 200
-
-
-
-# Upgrade License API
-@app.route("/upgrade-license", methods=["POST"])
+@auth.route("/upgrade-license", methods=["POST"])
 def upgrade_license():
     try:
         user_id = request.form.get("user_id")
         license_type = request.form.get("license_type")
-
+        payment_method_id = request.form.get("payment_method_id")
         if not user_id or not license_type:
             return jsonify({"error": "User ID and license type are required"}), 400
-
+        if payment_method_id:
+            try:
+                stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
+                payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
+                if payment_method.type != 'card':
+                    return jsonify({"error": "Invalid payment method type"}), 400
+            except stripe.error.CardError as e:
+                return jsonify({"error": f"Card verification failed: {str(e)}"}), 400
+            except stripe.error.StripeError as e:
+                return jsonify({"error": f"Stripe error: {str(e)}"}), 500
         user = db.accounts.find_one({"_id": ObjectId(user_id)})
         if not user:
             return jsonify({"error": "User not found"}), 404
-
         duration_mapping = {
             "1month": 30,
             "3months": 90,
             "6months": 180,
             "1year": 365
         }
-
         if license_type not in duration_mapping:
             return jsonify({"error": "Invalid license type"}), 400
-
         start_date = datetime.utcnow()
         end_date = start_date + timedelta(days=duration_mapping[license_type])
-
+        update_data = {
+            "license_type": license_type,
+            "license_start": start_date,
+            "license_end": end_date
+        }
+        if payment_method_id:
+            update_data["payment_method_id"] = payment_method_id
         db.accounts.update_one(
             {"_id": ObjectId(user_id)},
-            {
-                "$set": {
-                    "license_type": license_type,
-                    "license_start": start_date,
-                    "license_end": end_date
-                }
-            }
+            {"$set": update_data}
         )
         return jsonify({"message": f"License upgraded to {license_type}"}), 200
-
     except Exception as e:
+        current_app.logger.error(f"Error in upgrade_license: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# Login API with license check
-@app.route("/login", methods=["POST"])
+@auth.route("/login", methods=["POST"])
 def login():
     try:
         username = request.form.get("username")
         password = request.form.get("password")
-
         if not username or not password:
             return jsonify({"error": "Username and password are required"}), 400
-
         user = db.accounts.find_one({
-            "$or": [
-                {"username": username},
-                {"email": username}  # username might be email
-            ]
+            "$or": [{"username": username}, {"email": username}]
         })
-
         if not user or not check_password_hash(user["password"], password):
             return jsonify({"error": "Invalid username or password"}), 401
-
         user_type = user.get("user_type")
-        organization = user.get("org", "")  # Using org instead of organization
+        organization = user.get("org", "")
         license_end = user.get("license_end")
         current_date = datetime.utcnow()
         is_admin = user_type == "admin"
-
-        # Check if license is valid
         license_status = "active"
-        if not is_admin:  # Skip license check for admins
+        if not is_admin:
             if not license_end:
                 license_status = "inactive"
             elif current_date > license_end:
                 license_status = "expired"
-
-        # If the user is NOT an admin AND (has no license OR license expired) AND has no organization -> block login.
         if not is_admin:
             if license_status in ["inactive", "expired"] and not organization:
                 return jsonify({
                     "error": "Access denied. No valid license and no organization assigned.",
                     "license_status": license_status
                 }), 403
-
-        # If license is invalid, prompt for upgrade (unless admin)
         if license_status in ["inactive", "expired"] and not is_admin:
             return jsonify({
                 "error": "License expired. Please upgrade to continue.",
                 "license_status": license_status
             }), 403
-
         token = str(user["_id"])
-
         model = db.Models.find_one(
             {"user_id": str(user["_id"]), "status": 1},
             sort=[("_id", -1)]
         )
-
         model_id = model["_id"] if model else None
-
-        return (
-            jsonify(
-                {
-                    "message": "Login Successful",
-                    "model_id": str(model_id),
-                    "user-id": token,
-                    "username": user["username"],
-                    "license_type": user.get("license_type"),
-                    "license_key": user.get("license_key"),
-                    "license_start": str(user.get("license_start")),
-                    "license_end": str(user.get("license_end")),
-                    "license_status": license_status
-                }
-            ),
-            200,
-        )
+        return jsonify({
+            "message": "Login Successful",
+            "model_id": str(model_id),
+            "user-id": token,
+            "username": user["username"],
+            "license_type": user.get("license_type"),
+            "license_key": user.get("license_key"),
+            "license_start": str(user.get("license_start")),
+            "license_end": str(user.get("license_end")),
+            "license_status": license_status
+        }), 200
     except Exception as e:
+        current_app.logger.error(f"Error in login: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# Request Reset Password API
-@app.route("/request-reset-password", methods=["POST"])
+@auth.route("/request-reset-password", methods=["POST"])
 def request_reset_password():
     try:
         username = request.form.get("username")
-
         if not username:
             return jsonify({"error": "Username is required"}), 400
-
         user = db.accounts.find_one({"username": username})
         if user:
             reset_token = str(uuid.uuid4())
@@ -463,41 +405,33 @@ def request_reset_password():
                 {"username": username},
                 {"$set": {"reset_token": reset_token}}
             )
-            return (
-                jsonify(
-                    {
-                        "message": "Password reset requested. Check your email for the reset link.",
-                        "reset_token": reset_token,
-                    }
-                ),
-                200,
-            )
+            return jsonify({
+                "message": "Password reset requested. Check your email for the reset link.",
+                "reset_token": reset_token
+            }), 200
         else:
             return jsonify({"error": "User not found"}), 404
     except Exception as e:
+        current_app.logger.error(f"Error in request_reset_password: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# Reset Password API
-@app.route("/reset-password", methods=["POST"])
+@auth.route("/reset-password", methods=["POST"])
 def reset_password():
     try:
         new_password = request.form.get("new_password")
         reset_token = request.form.get("reset_token")
-
         if not reset_token or not new_password:
             return jsonify({"error": "Reset token and new password are required"}), 400
-
         reset_entry = db.accounts.find_one({"reset_token": reset_token})
         if reset_entry:
-            hashed_password = generate_password_hash(
-                new_password, method="pbkdf2:sha256"
-            )
+            hashed_password = generate_password_hash(new_password, method="pbkdf2:sha256")
             db.accounts.update_one(
                 {"username": reset_entry["username"]},
-                {"$set": {"password": hashed_password}, "$unset": {"reset_token": ""}},
+                {"$set": {"password": hashed_password}, "$unset": {"reset_token": ""}}
             )
             return jsonify({"message": "Password has been reset successfully!"}), 200
         else:
             return jsonify({"error": "Invalid or expired reset token"}), 400
     except Exception as e:
+        current_app.logger.error(f"Error in reset_password: {str(e)}")
         return jsonify({"error": str(e)}), 500

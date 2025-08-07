@@ -19,3 +19,4 @@ waitress==3.0.0
 reportlab==3.6.13
 Werkzeug==3.0.3
 azure-storage-blob==12.16.0
+stripe==12.4.0
