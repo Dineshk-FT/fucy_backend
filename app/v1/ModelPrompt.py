@@ -27,6 +27,59 @@ modelprompt = Blueprint("modelprompt", __name__)
 genai.configure(api_key=Config.GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
+
+# Prompt template fo label creation
+def build_prompt(system_name):
+    return f"""
+You are a domain expert in automotive embedded systems.
+
+Generate a JSON list of label-value pairs that represent realistic inputs required to build a '{system_name}'.
+
+Each entry must follow this structure:
+- "label": (input field name, such as 'algorithms' or 'communicationInterfaces')
+- "value": (example values in a short comma-separated format, no extra explanation)
+
+Avoid technical explanations, no nested structures, and no long sentences. 
+Only output valid JSON array with 5-6 entries, like this:
+
+[
+  {{ "label": "algorithms", "value": "ExampleAlgorithm1, ExampleAlgorithm2" }},
+  {{ "label": "communicationInterfaces", "value": "CAN, Ethernet, LIN" }},
+  ...
+]
+"""
+
+@modelprompt.route("/v1/generate/get_system_inputs", methods=["POST"])
+def get_system_inputs():
+    # Try getting systemName from form data
+    system_name = request.form.get("systemName")
+    if not system_name:
+        return jsonify({"error": "'systemName' is required in form data"}), 400
+
+    try:
+        prompt = build_prompt(system_name)
+        response = model.generate_content(prompt)
+        content = response.text.strip()
+
+        # Remove markdown-style code block
+        if content.startswith("```"):
+            import re
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+
+        try:
+            inputs = json.loads(content)
+        except json.JSONDecodeError:
+            return jsonify({
+                "error": "Could not parse model response as JSON",
+                "raw_response": content
+            }), 500
+
+        return jsonify({"inputs": inputs})
+
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
     """Generate ReactFlow template - can be called as route or function"""
@@ -34,27 +87,36 @@ def generate_reactflow_template(standalone=False, request_data=None):
         if not request_data:
             request_data = request
 
-        # Get inputs
+        # Static fields
         user_id = request.headers.get("user-id")
         created_by = request_data.form.get("createdBy", "system")
-        system_name = request_data.form.get('systemName', 'Test System')
-        algorithms = request_data.form.get('algorithms', '["Algorithm 1", "Algorithm 2"]')
-        communication_interfaces = request_data.form.get('communicationInterfaces', '["Interface 1", "Interface 2"]')
-        cell_chemistry = request_data.form.get('cellChemistry', '["Chemistry 1", "Chemistry 2"]')
+        system_name = request_data.form.get("systemName", "Test System")
 
-        # Setup Gemini prompt
+        # Dynamically collect all other form fields (excluding static)
+        static_fields = {"createdBy", "systemName"}
+        dynamic_fields = {
+            key: request_data.form.get(key)
+            for key in request_data.form
+            if key not in static_fields
+        }
+
+        # Convert dynamic fields into prompt format
+        dynamic_prompt_lines = "\n".join([
+            f"{key.replace('_', ' ').title()}: {value}"
+            for key, value in dynamic_fields.items()
+        ])
+
+        # Build prompt
         prompt = f"""
 Return ONLY valid JSON for a React Flow diagram for the system below:
 
 System Name: {system_name}
-Algorithms: {algorithms}
-Communication Interfaces: {communication_interfaces}
-Cell Chemistry: {cell_chemistry}
+{dynamic_prompt_lines}
 
 Include:
   - Nodes must have: id, type ("default" or "group"), data.label, properties.
   - Edges must have: id, type ("step"), source, target, sourceHandle, targetHandle, data.label, properties.
-  - Properties should contains only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
+  - Properties should contain only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
 
 Constraints:
   - If multiple related nodes exist, create at least one group node to contain them.
@@ -97,7 +159,6 @@ Example:
         except json.JSONDecodeError:
             data = ast.literal_eval(cleaned)
 
-        # Handle different response formats
         if 'templates' in data:
             minimal_nodes = data['templates']['nodes']
             minimal_edges = data['templates']['edges']
@@ -118,14 +179,14 @@ Example:
         }
 
         # Store model
-        current = datetime.now()  
+        current = datetime.now()
         model_doc = {
             "name": system_name,
             "template": [],
             "created_by": created_by,
             "created_at": current,
             "last_updated": current,
-            "user_id":user_id,
+            "user_id": user_id,
             "status": 1,
             "type": "model"
         }
@@ -134,7 +195,6 @@ Example:
 
         # Store asset
         Derivations, Details = getDerivationsAndDetails(final_result, {})
-
         db.Assets.insert_one({
             "model_id": model_id,
             "template": final_result,
@@ -158,7 +218,7 @@ Example:
 
         result_data = {
             "message": "Template generated and stored successfully",
-            "model_id": str(model_id),
+            "model_id": model_id,
             "template": final_result,
             "system_name": system_name
         }
@@ -175,7 +235,7 @@ Example:
         if standalone:
             raise e
         return jsonify({"error": str(e)}), 500
-     
+   
 # Damage scene creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
@@ -780,25 +840,7 @@ def generate_cybersecurity_artifacts():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-@modelprompt.route("/v1/generate/model", methods=["POST"])
-def generate_reactflow_template_route():
-    """Standalone endpoint for template generation"""
-    return generate_reactflow_template()
 
-@modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
-def create_damage_scenarios_route():
-    """Route handler for damage scenario generation"""
-    response = create_damage_scenarios(standalone=True, request_data=request)
-
-    # Automatically call threat scenario generation
-    model_id = request.form.get('modelId')
-    threat_response = create_threat_scenarios(model_id)
-
-    return jsonify({
-        "damage_scenarios": response,
-        "threat_scenarios": threat_response[0].json
-    }), 201
 
 @modelprompt.route('/v1/generate/full-model', methods=['POST'])
 def generate_full_model():
@@ -859,12 +901,8 @@ def generate_full_model():
 
         return current_app.response_class(
             response=json.dumps({
+                "message":"Model Generated Successfully",
                 "model": template_response,
-                "damage_scenarios": scenarios_data,
-                "threat_scenarios": threat_data,
-                "derived_threat_scenarios": derived_data,
-                "attack_trees": attack_data,
-                "cybersecurity_artifacts": cyber_data  # ✅ Add this
             }, cls=JSONEncoder),
             status=201,
             mimetype='application/json'
