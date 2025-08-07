@@ -12,9 +12,6 @@ class Config:
     MAIL_PASSWORD = 'ogvi pzkl oxld eyib'
     MAIL_DEFAULT_SENDER = 'dinesh.ravi.kumar115@gmail.com'
     
-    # Stripe Configuration
-    STRIPE_SECRET_KEY = 'sk_test_51RtOUPBUB67jzFEiT1jlzpUr7RzZeOULKqkGNTnWrjxiJ7kUfQ7mfR8LGHe9gEHTqK7tQCUuxM5uF81RfJIWksTQ00QcL1iVZN'
-    
     # API Keys (Note: Consider moving these to environment variables)
     GENAI_API_KEY = "AIzaSyDHYoIyp48qUtq1czC0C3DwddggtP73Osw"
     GOOGLE_API_KEY = "AIzaSyAiVDewjdJj3wPSCMj3BFXwdKXpUDNHEVA"

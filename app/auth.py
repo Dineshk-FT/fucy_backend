@@ -8,8 +8,12 @@ from bson import ObjectId
 import random
 import string
 from app.__init__ import send_email
+import os
 import stripe
 
+from dotenv import load_dotenv
+load_dotenv()
+stripe_key = os.getenv('STRIPE_SECRET_KEY')
 def generate_license_key():
     """Generate a unique license key in the format: XXXX-XXXX-XXXX-XXXX""" 
     chars = string.ascii_uppercase + string.digits
@@ -40,8 +44,7 @@ def verify_card():
             return jsonify({"error": "Payment method ID is required"}), 400
         
         try:
-            stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
-            if not stripe.api_key:
+            if not stripe_key:
                 raise ValueError("Stripe API key is not configured")
                 
             payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
@@ -91,7 +94,6 @@ def register():
             if not payment_method_id:
                 return jsonify({"error": "Payment method ID is required for non-trial plans"}), 400
             try:
-                stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
                 payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
                 if payment_method.type != 'card':
                     return jsonify({"error": "Invalid payment method type"}), 400
@@ -300,7 +302,6 @@ def upgrade_license():
             return jsonify({"error": "User ID and license type are required"}), 400
         if payment_method_id:
             try:
-                stripe.api_key = current_app.config.get('STRIPE_SECRET_KEY')
                 payment_method = stripe.PaymentMethod.retrieve(payment_method_id)
                 if payment_method.type != 'card':
                     return jsonify({"error": "Invalid payment method type"}), 400
