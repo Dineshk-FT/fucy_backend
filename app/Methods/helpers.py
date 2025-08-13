@@ -451,3 +451,43 @@ def structure_attack_tree_templates(raw_templates):
         "nodes": structured_nodes,
         "edges": structured_edges
     }
+
+# Backend version of AttackTableoptions
+AttackTableoptions = {
+    # "Approach": [
+    #     {"value": "Attack Potential-based Approach"},
+    #     {"value": "CVSS-based Approach"},
+    #     {"value": "Attack Vector-based Approach"}
+    # ],
+    "Elapsed Time": [
+        {"value": "<= 1 day", "rating": 0},
+        {"value": "<= 1 week", "rating": 1},
+        {"value": "<= 1 month", "rating": 4},
+        {"value": "<= 6 month", "rating": 17},
+        {"value": ">6 month", "rating": 19}
+    ],
+    "Expertise": [
+        {"value": "Layman", "rating": 0},
+        {"value": "Proficient", "rating": 3},
+        {"value": "Expert", "rating": 6},
+        {"value": "Multiple experts", "rating": 8}
+    ],
+    "Knowledge of the Item": [
+        {"value": "Public information", "rating": 0},
+        {"value": "Restricted information", "rating": 3},
+        {"value": "Confidential information", "rating": 7},
+        {"value": "Strictly confidential information", "rating": 11}
+    ],
+    "Window of Opportunity": [
+        {"value": "Unlimited", "rating": 0},
+        {"value": "Easy", "rating": 1},
+        {"value": "Moderate", "rating": 4},
+        {"value": "Difficult", "rating": 10}
+    ],
+    "Equipment": [
+        {"value": "Standard", "rating": 0},
+        {"value": "Specialized", "rating": 4},
+        {"value": "Bespoke", "rating": 7},
+        {"value": "Multiple bespoke", "rating": 9}
+    ]
+}
