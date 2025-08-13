@@ -104,12 +104,11 @@ def register():
                 return jsonify({"error": f"Stripe error: {str(e)}"}), 500
 
         username = f"{firstname}.{lastname}".lower()
-        existing_account = db.accounts.find_one({"email": email})
         existing_user = db.accounts.find_one({"username": username})
         existing_org = db.accounts.find_one({"org": org})
 
-        if existing_account and existing_user and existing_org:
-            return jsonify({"error": "User already has an account"}), 400
+        if existing_user and existing_org:
+            return jsonify({"error": "Username and organization combination already exists"}), 400
 
         duration_mapping = {
             "trial": 14,
