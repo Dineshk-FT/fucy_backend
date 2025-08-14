@@ -57,7 +57,6 @@ The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item D
 - Keep the description technology-neutral unless otherwise specified.
 - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
 
-Now, generate the Item Definition and System Diagram for the following automotive system:
 Generate a JSON list of label-value pairs that represent realistic inputs required to build TARA as per ISO 21434 '{system_name}'.
 
 Each entry must follow this structure:
@@ -74,9 +73,31 @@ Only output valid JSON array with 5-6 entries, like this:
 ]
 """
 
+def safe_json_parse(content):
+    # First try direct parsing
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, str):
+            return json.loads(parsed)  # double-parsed case
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # If direct parse fails, try extracting first JSON array
+    match = re.search(r"\[\s*{.*}\s*\]", content, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, str):
+                return json.loads(parsed)
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
 @modelprompt.route("/v1/generate/get_system_inputs", methods=["POST"])
 def get_system_inputs():
-    # Try getting systemName from form data
     system_name = request.form.get("systemName")
     if not system_name:
         return jsonify({"error": "'systemName' is required in form data"}), 400
@@ -86,22 +107,14 @@ def get_system_inputs():
         response = model.generate_content(prompt)
         content = response.text.strip()
 
-        # Remove markdown-style code block
-        if content.startswith("```"):
-            import re
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-
-        try:
-            inputs = json.loads(content)
-        except json.JSONDecodeError:
+        inputs = safe_json_parse(content)
+        if not inputs:
             return jsonify({
                 "error": "Could not parse model response as JSON",
                 "raw_response": content
             }), 500
 
         return jsonify({"inputs": inputs})
-
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -424,7 +437,7 @@ def create_threat_scenarios(model_id):
                 "damage_key": damage["key"],
                 "damage_name": damage["Name"],
                 "id": f"DS{str(i).zfill(3)}",
-                "rowId": str(uuid.uuid4()),
+                "rowId": damage["_id"],
                 "Details": []
             }
 
@@ -581,19 +594,21 @@ def create_derived_threat_scenario():
 def preprocess_threat_scenarios(threat_scenarios):
     """
     Flattens the Details in each threat scenario so Gemini can see scenario names and nodes clearly.
-    Returns a list of dicts with rowId, scenario_name, node, nodeId, and properties.
+    Keeps properties so STRIDE prefix can be applied later based on node type.
     """
     processed = []
     for scenario in threat_scenarios:
         for detail in scenario.get("Details", []):
             row_id = detail.get("rowId")
             for d in detail.get("Details", []):
+                props = [p.get("name") for p in d.get("props", [])]
+
                 processed.append({
                     "rowId": row_id,
                     "scenario_name": d.get("name", ""),
                     "node": d.get("node", ""),
                     "nodeId": d.get("nodeId", ""),
-                    "properties": [p.get("name") for p in d.get("props", [])]
+                    "properties": props
                 })
     return processed
 
@@ -719,7 +734,11 @@ def generate_attack_tree():
             scenes = []
 
             for scene in raw_scenes:
-                structured_templates = structure_attack_tree_templates(scene.get("templates", {}))
+                structured_templates = structure_attack_tree_templates(
+                scene.get("templates", {}),
+                processed_scenarios=processed_scenarios
+            )
+
 
                 scenes.append({
                     "ID": scene.get("ID"),
@@ -1196,6 +1215,28 @@ def generate_full_model():
         threat_response_obj, _ = threat_response if isinstance(threat_response, tuple) else (threat_response, None)
         threat_data = threat_response_obj.get_json()
 
+        # risk treatment
+        for threat in threat_data.get("scenarios", {}).get("Details", []):
+                    for item in threat.get("Details", []):
+                        for prop in item.get("props", []):
+                            # This mimics your add_risk_treatment()
+                            db.Risk_treatment.update_one(
+                                {"model_id": template_response['model_id']},
+                                {
+                                    "$addToSet": {
+                                        "Details": {
+                                            "id": str(uuid.uuid4()),
+                                            "threat_id": threat.get("threatId"),
+                                            "node_id": item["nodeId"],
+                                            "label": item.get("label"),
+                                            "damage_id": prop.get("damageId"),
+                                            "threat_key": threat.get("key"),
+                                        }
+                                    }
+                                },
+                                upsert=True
+                            )
+
         # Prepare threatIds for derived threat scenario generation
         threat_ids = []
         for threat in threat_data.get("scenarios", {}).get("Details", []):
@@ -1218,13 +1259,13 @@ def generate_full_model():
             attack_response = generate_attack_tree()
             attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
 
-        # with current_app.test_request_context(
-        #     method='POST',
-        #     data={
-        #         "modelId":template_response['model_id']
-        #     }
-        # ):
-        #     possible_attacks = convert_possible_events_from_attack_trees()
+        with current_app.test_request_context(
+            method='POST',
+            data={
+                "modelId":template_response['model_id']
+            }
+        ):
+            possible_attacks = convert_possible_events_from_attack_trees()
         # Generate cybersecurity artifacts via test request context
         with current_app.test_request_context(
             method='POST',
@@ -1243,12 +1284,14 @@ def generate_full_model():
             }
         ):
             attacks = generate_attacks()
-            # attack_data = cyber_response.get_json() if hasattr(cyber_response, 'get_json') else {}
+            # attack_data = attacks.get_json() if hasattr(attacks, 'get_json') else {}
 
         return current_app.response_class(
             response=json.dumps({
                 "message":"Model Generated Successfully",
                 "model": template_response,
+                # "attacks": attacks,
+                # "threat_data": threat_data,
             }, cls=JSONEncoder),
             status=201,
             mimetype='application/json'

@@ -305,10 +305,38 @@ def build_full_edge(edge):
 
 
 
-def structure_attack_tree_templates(raw_templates):
+def threat_type(value: str) -> str:
     """
-    Structure attack tree: default -> individual OR gates -> events
+    Maps a property name to a STRIDE threat category.
+    """
+    type_map = {
+        "Integrity": "Tampering",
+        "Confidentiality": "Information Disclosure",
+        "Availability": "Denial of service",
+        "Authenticity": "Spoofing",
+        "Authorization": "Elevation of Privilege",
+        "Non-repudiation": "Rejection"
+    }
+    return type_map.get(value, "")
+
+def apply_stride_prefix(name: str, props: list, node_type: str) -> str:
+    """
+    Adds STRIDE prefix only for 'default' node types.
+    """
+    if node_type not in ("default"):
+        return name
+
+    for p in props:
+        mapped = threat_type(p)
+        if mapped and not name.startswith(mapped):
+            return f"{mapped} of {name}"
+    return name
+
+def structure_attack_tree_templates(raw_templates, processed_scenarios=None):
+    """
+    Structure attack tree: default -> individual OR gates -> events.
     Injects a unique gate between root and every event node.
+    Adds STRIDE prefix for root and Event nodes based on processed_scenarios.
     """
     nodes = raw_templates.get("nodes", [])
     edges = raw_templates.get("edges", [])
@@ -318,13 +346,24 @@ def structure_attack_tree_templates(raw_templates):
     if not root_node:
         raise ValueError("No root node (type='default') found")
 
+    # Get props for root
+    root_props = []
+    if processed_scenarios:
+        root_props = next((s["properties"] for s in processed_scenarios if s["rowId"] == root_node.get("threat_id")), [])
+
+    # Apply STRIDE prefix for root node
+    root_label = apply_stride_prefix(
+        root_node.get("label", root_node.get("name", "Root")),
+        root_props,
+        "default"
+    )
+
     # Remaining nodes are events
     event_nodes = [n for n in nodes if n != root_node]
 
     structured_nodes = []
     structured_edges = []
 
-    # Base style for nodes
     def style(width=120, height=60):
         return {
             "fontSize": "16px",
@@ -347,7 +386,7 @@ def structure_attack_tree_templates(raw_templates):
         "id": root_node["id"],
         "position": {"x": 300, "y": 32},
         "type": "default",
-        "label": root_node.get("label", root_node.get("name", "Root")),
+        "label": root_label,
         "dragged": True,
         "nodeId": root_node.get("nodeId", ""),
         "threatId": root_node.get("threat_id", ""),
@@ -356,10 +395,10 @@ def structure_attack_tree_templates(raw_templates):
         "height": 60,
         "key": root_node.get("key", ""),
         "data": {
-            "label": root_node.get("label", root_node.get("name", "Root")),
+            "label": root_label,
             "nodeId": root_node.get("nodeId", ""),
             "style": style(150, 60),
-            "connections": []  # will be filled below
+            "connections": []
         }
     }
     structured_nodes.append(root_structured)
@@ -373,7 +412,19 @@ def structure_attack_tree_templates(raw_templates):
         gate_y = 150
         event_y = 270
 
-        # Add OR Gate node
+        # Get props for event
+        event_props = []
+        if processed_scenarios:
+            event_props = next((s["properties"] for s in processed_scenarios if s["rowId"] == event.get("threat_id")), [])
+
+        # Apply STRIDE prefix for Event nodes
+        event_label = apply_stride_prefix(
+            event.get("label", event.get("name", "Event")),
+            event_props,
+            "Event"
+        )
+
+        # OR Gate node
         gate_node = {
             "id": gate_id,
             "position": {"x": gate_x, "y": gate_y},
@@ -394,16 +445,16 @@ def structure_attack_tree_templates(raw_templates):
         }
         structured_nodes.append(gate_node)
 
-        # Add Event node
+        # Event node
         event_node = {
             "id": event_id,
             "position": {"x": gate_x, "y": event_y},
             "type": "Event",
-            "label": event.get("label", event.get("name", "Event")),
+            "label": event_label,
             "width": 198,
             "height": 60,
             "data": {
-                "label": event.get("label", event.get("name", "Event")),
+                "label": event_label,
                 "style": style(120, 60)
             },
             "selected": True,
@@ -411,7 +462,7 @@ def structure_attack_tree_templates(raw_templates):
         }
         structured_nodes.append(event_node)
 
-        # Add gate connection to event
+        # Gate → Event edge
         structured_edges.append({
             "id": f"{gate_id}-{event_id}",
             "source": gate_id,
@@ -426,7 +477,7 @@ def structure_attack_tree_templates(raw_templates):
             "points": []
         })
 
-        # Add root → gate connection
+        # Root → Gate edge
         structured_edges.append({
             "id": f"{root_node['id']}-{gate_id}",
             "source": root_node["id"],
@@ -441,7 +492,6 @@ def structure_attack_tree_templates(raw_templates):
             "points": []
         })
 
-        # Update root node's connections
         root_structured["data"]["connections"].append({
             "id": gate_id,
             "type": "OR Gate"
@@ -491,3 +541,4 @@ AttackTableoptions = {
         {"value": "Multiple bespoke", "rating": 9}
     ]
 }
+
