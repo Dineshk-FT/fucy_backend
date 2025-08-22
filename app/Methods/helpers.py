@@ -11,6 +11,8 @@ from reportlab.lib import colors
 from config import Config
 import datetime
 import uuid
+import json
+import re
 
 def get_highest_impact(impacts):
     # impact_order = ["Severe", "Major", "Moderate", "Minor", "Negligible"]
@@ -542,3 +544,27 @@ AttackTableoptions = {
     ]
 }
 
+
+def safe_json_parse(content):
+    # First try direct parsing
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, str):
+            return json.loads(parsed)  # double-parsed case
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # If direct parse fails, try extracting first JSON array
+    match = re.search(r"\[\s*{.*}\s*\]", content, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, str):
+                return json.loads(parsed)
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+    return None
+    

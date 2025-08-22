@@ -6,7 +6,8 @@ import json
 import re
 from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
-from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions
+from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
+from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions,threat_type,safe_json_parse
 import random
 import uuid
 import string
@@ -29,81 +30,46 @@ model = genai.GenerativeModel('gemini-2.5-flash')
 
 
 #1- Prompt template for label creation (inputs for the model)
-def build_prompt(system_name):
-    return f"""
-You are a domain expert in automotive systems.
-You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
-Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
-The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
+def build_prompt(system_name, user_prompt=None):
+    # --- Default Instructions ---
+    default_prompt = f"""
+    Build the prompt for generating system inputs (TARA as per ISO 21434).
+You are an automotive System Architect following ISO/SAE 21434 standards.
+"""
 
-1. **Item Name** – The name of the system or feature.
-2. **Item Purpose** – The high-level purpose and intended functionality.
-3. **Operational Description** – How the item operates, key functions, and operational scenarios.
-4. **Boundaries of the Item** – What is inside and outside the scope (physical and logical boundaries).
-5. **Interfaces** – All relevant physical, data, and network interfaces.
-6. **Assumptions and Constraints** – Any limitations, regulations, or environmental conditions.
-7. **Dependencies** – Dependencies on other systems or components.
-8. **Stakeholders** – Relevant stakeholders (OEM, supplier, regulator, user, etc.).
-9. **System Diagram** – A block diagram showing major components, interfaces, and external connections.
-
-**Requirements for the System Diagram**:
-- Clearly identify ECUs, sensors, actuators, communication buses, and external entities (e.g., cloud services, mobile apps).
-- Use clear labels for each component and interface.
-- Show data flows and connection types (wired, wireless, CAN, Ethernet, Bluetooth, etc.).
-- Represent external systems and boundaries distinctly.
-
-**Constraints:**
-- Follow ISO/SAE 21434 terminology.
-- Keep the description technology-neutral unless otherwise specified.
-- Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
-
+    # --- Data Structure Prompt ---
+    data_structure_prompt = """
 Generate a JSON list of label-value pairs that represent realistic inputs required to build TARA as per ISO 21434 '{system_name}'.
-
+(for Data structure)
 Each entry must follow this structure:
 - "label": (input field name, such as 'systemComponents' or 'communicationInterfaces')
 - "value": (example values in a short comma-separated format, no extra explanation)
 
-Avoid technical explanations, no nested structures, and no long sentences. 
-Only output valid JSON array with 5-6 entries, like this:
+Avoid technical explanations, no nested structures, and no long sentences.
+Only output valid JSON array.
 
+Example format:
 [
-  {{ "label": "systemComponents", "value": "Engine, Transmission, Chassis" }},
-  {{ "label": "communicationInterfaces", "value": "CAN, Ethernet, LIN" }},
+  { "label": "systemComponents", "value": "Engine, Transmission, Chassis" },
+  { "label": "communicationInterfaces", "value": "CAN, Ethernet, LIN" },
   ...
 ]
 """
 
-def safe_json_parse(content):
-    # First try direct parsing
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, str):
-            return json.loads(parsed)  # double-parsed case
-        return parsed
-    except json.JSONDecodeError:
-        pass
+    # Final prompt uses user prompt if provided
+    return (user_prompt or default_prompt) + data_structure_prompt
 
-    # If direct parse fails, try extracting first JSON array
-    match = re.search(r"\[\s*{.*}\s*\]", content, re.DOTALL)
-    if match:
-        try:
-            parsed = json.loads(match.group(0))
-            if isinstance(parsed, str):
-                return json.loads(parsed)
-            return parsed
-        except json.JSONDecodeError:
-            pass
-
-    return None
 
 @modelprompt.route("/v1/generate/get_system_inputs", methods=["POST"])
 def get_system_inputs():
     system_name = request.form.get("systemName")
+    user_prompt = request.form.get("systemInputPrompt")  # optional override
+
     if not system_name:
         return jsonify({"error": "'systemName' is required in form data"}), 400
 
     try:
-        prompt = build_prompt(system_name)
+        prompt = build_prompt(system_name, user_prompt)
         response = model.generate_content(prompt)
         content = response.text.strip()
 
@@ -132,8 +98,11 @@ def generate_reactflow_template(standalone=False, request_data=None):
         created_by = request_data.form.get("createdBy", "system")
         system_name = request_data.form.get("systemName", "Test System")
 
-        # Dynamically collect all other form fields (excluding static)
-        static_fields = {"createdBy", "systemName"}
+        # Optional user-provided descriptive prompt (above data structure)
+        custom_prompt = request_data.form.get("itemDefinitionPrompt")
+
+        # Dynamically collect all other form fields (excluding static + prompt)
+        static_fields = {"createdBy", "systemName", "prompt"}
         dynamic_fields = {
             key: request_data.form.get(key)
             for key in request_data.form
@@ -146,9 +115,8 @@ def generate_reactflow_template(standalone=False, request_data=None):
             for key, value in dynamic_fields.items()
         ])
 
-        # Build prompt
-        prompt = f"""
-Return ONLY valid JSON for a React Flow diagram for the system below:
+        # --- Default description (above Data structure) ---
+        default_description = """
 You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
 Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
 The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
@@ -175,10 +143,10 @@ The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item D
 - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
 
 Now, generate the Item Definition and System Diagram for the following automotive system:
+"""
 
-System Name: {system_name}
-{dynamic_prompt_lines}
-
+        # --- Mandatory Data structure section ---
+        data_structure_section = """
 (For Data structure)
 Include :
   - Nodes must have: id, type ("default" or "group"), data.label, properties.
@@ -186,33 +154,45 @@ Include :
   - Properties should contain only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
 
 Constraints:
-  - If multiple related nodes exist, create at least one group node to contain them.
+  - If multiple related nodes exist, create possible group node to contain them.
   - Do not include position information - positions will be calculated automatically.
   - Specify parent-child relationships using parentId where applicable.
 
 Example:
-{{
+{
   "nodes": [
-    {{
+    {
       "id": "1",
       "type": "default",
-      "data": {{"label": "BMU"}},
+      "data": {"label": "BMU"},
       "properties": ["Confidentiality"]
-    }}
+    }
   ],
   "edges": [
-    {{
+    {
       "id": "e1-2",
       "type": "step",
       "source": "1",
       "target": "2",
       "sourceHandle": "bottom",
       "targetHandle": "top",
-      "data": {{"label": "CAN"}},
+      "data": {"label": "CAN"},
       "properties": ["Integrity"]
-    }}
+    }
   ]
-}}
+}
+"""
+
+        # --- Final prompt assembly ---
+        prompt = f"""
+Return ONLY valid JSON for a React Flow diagram for the system below:
+
+{custom_prompt if custom_prompt else default_description}
+
+System Name: {system_name}
+{dynamic_prompt_lines}
+
+{data_structure_section}
 """
 
         # Call Gemini
@@ -258,6 +238,7 @@ Example:
             "type": "model"
         }
         result = db.Models.insert_one(model_doc)
+        # print("result",result)
         model_id = str(result.inserted_id)
 
         # Store asset
@@ -301,8 +282,8 @@ Example:
     except Exception as e:
         if standalone:
             raise e
-        return jsonify({"error": str(e)}), 500
-   
+        return jsonify({"error in item definition": str(e)}), 500
+
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
@@ -317,6 +298,7 @@ def create_damage_scenarios(standalone=False, request_data=None):
         model_id = req_data.form.get('modelId')
         system_name = req_data.form.get('systemName', '')
         template_raw = req_data.form.get('template', '{}')
+        user_prompt = req_data.form.get('damageScenarioPrompt', '')  # 👈 Optional user prompt
 
         if not model_id:
             if standalone:
@@ -325,8 +307,8 @@ def create_damage_scenarios(standalone=False, request_data=None):
 
         template = json.loads(template_raw) if template_raw else {}
 
-        # 🔄 Updated prompt: Only generate damage scenarios (no threat_scenario inside)
-        prompt = f"""
+        # Default top part of prompt
+        default_prompt = f"""
 Generate exactly 2 damage scenarios for the '{system_name}' system in JSON format.
 
 System Components:
@@ -336,12 +318,22 @@ Relationships:
 {json.dumps(template.get('edges', []), indent=2)}
 
 Requirements:
-1. Create TWO different scenarios targeting different critical components
+1. Create different scenarios targeting different critical components
 2. Each MUST include:
    - Damage scenario details
    - Realistic cyber losses (integrity/confidentiality/availability)
    - Plausible impact ratings (Major/Moderate/Minor)
-3. Use EXACTLY this structure:
+"""
+
+        # Use user prompt if provided, otherwise default
+        prompt_intro = user_prompt if user_prompt else default_prompt
+
+        # Final prompt = user or default intro + mandatory data structure
+        prompt = f"""
+{prompt_intro}
+
+(for Data structure)
+Use EXACTLY this structure:
 {{
   "system_name": "{system_name}",
   "model_id": "{model_id}",
@@ -390,8 +382,6 @@ Requirements:
         # ✅ Only store damage scenarios
         damage_result = db.Damage_scenarios.insert_one(scenarios)
 
-        # ❌ Do not store threat scenarios here
-
         result = {
             "message": "Damage scenarios created successfully",
             "scenario_id": str(damage_result.inserted_id),
@@ -407,12 +397,12 @@ Requirements:
         error = "Invalid response format from AI"
         if standalone:
             raise ValueError(error)
-        return jsonify({"error": error}), 500
+        return jsonify({"error in damage scenario": error}), 500
     except Exception as e:
         if standalone:
             raise
-        return jsonify({"error": str(e)}), 500
-    
+        return jsonify({"error in damage scenario 500": str(e)}), 500
+
 #4 - Threat scenario creation
 # Manual threat creation
 @modelprompt.route('/v1/generate/threat-scenarios', methods=['POST'])
@@ -479,7 +469,7 @@ def create_threat_scenarios(model_id):
             "scenarios": threat_scenario_doc
         }), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in threat scenario": str(e)}), 500
 
 
 #threat creation
@@ -502,13 +492,28 @@ def group_threats_by_node(threat_ids):
     return grouped
 
 # Derived threat scenario creation
-def generate_single_derived_scenario(threat_group):
-    prompt = f"""
+def generate_single_derived_scenario(threat_group, user_prompt=None):
+    """
+    Generate a derived threat scenario name + description from a group of threats.
+    If user_prompt is provided, it replaces the intro part of the prompt.
+    """
+
+    # Default intro part
+    default_intro = f"""
 You are a cybersecurity expert. Based on the following related threats, generate a meaningful name and a concise description for a derived threat scenario. Do not use generic names like "Derived Threat Scenario".
 
 Here are the threats:
 {json.dumps(threat_group, indent=2)}
+"""
 
+    # Use user prompt if provided, else fallback
+    prompt_intro = user_prompt if user_prompt else default_intro
+
+    # Mandatory Data structure part
+    prompt = f"""
+{prompt_intro}
+
+(for Data structure)
 Each threat includes:
 - `nodeId`: the component or function
 - `propId`: the impacted property (can be ignored)
@@ -518,6 +523,8 @@ Return only a JSON object with:
 - name: (string)
 - description: (string)
 """
+
+    # Call Gemini
     gemini_response = model.generate_content(prompt)
 
     try:
@@ -528,12 +535,12 @@ Return only a JSON object with:
         )
         cleaned = extract_json_from_text(content_text)
         return json.loads(cleaned)
+
     except Exception as e:
         print("Gemini Output:", gemini_response)
         raise ValueError(f"Failed to parse Gemini response: {str(e)}")
 
-
-def generate_derived_threat_scenarios(model_id, threat_ids, name="", description=""):
+def generate_derived_threat_scenarios(model_id, threat_ids, name="", description="", user_prompt=None):
     details = []
 
     # Manual override (single scenario)
@@ -548,7 +555,7 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
     else:
         grouped = group_threats_by_node(threat_ids)
         for group in grouped.values():
-            result = generate_single_derived_scenario(group)
+            result = generate_single_derived_scenario(group, user_prompt)
             derived = {
                 "name": result.get("name", "Unnamed Derived Threat"),
                 "description": result.get("description", ""),
@@ -576,6 +583,7 @@ def create_derived_threat_scenario():
         name = request.form.get('name', "")
         description = request.form.get('description', "")
         model_id = request.form.get('modelId', "")
+        user_prompt = request.form.get('threatScenarioPrompt', "")
         threat_ids_raw = request.form.get('threatIds', "[]")
 
         threat_ids = json.loads(threat_ids_raw)
@@ -583,56 +591,67 @@ def create_derived_threat_scenario():
         if not model_id or not threat_ids:
             return jsonify({"error": "Missing modelId or threatIds"}), 400
 
-        results = generate_derived_threat_scenarios(model_id, threat_ids, name, description)
+        results = generate_derived_threat_scenarios(model_id, threat_ids, name, description, user_prompt)
         return jsonify(results), 201
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in derived threat scenario": str(e)}), 500
 
 #5 - Attack Scenarion Creation
 # generate Attack Tree
 def preprocess_threat_scenarios(threat_scenarios):
     """
     Flattens the Details in each threat scenario so Gemini can see scenario names and nodes clearly.
-    Keeps properties so STRIDE prefix can be applied later based on node type.
+    Uses props id as threat_id so attack trees can map correctly.
     """
     processed = []
     for scenario in threat_scenarios:
         for detail in scenario.get("Details", []):
             row_id = detail.get("rowId")
             for d in detail.get("Details", []):
-                props = [p.get("name") for p in d.get("props", [])]
-
-                processed.append({
-                    "rowId": row_id,
-                    "scenario_name": d.get("name", ""),
-                    "node": d.get("node", ""),
-                    "nodeId": d.get("nodeId", ""),
-                    "properties": props
-                })
+                for prop in d.get("props", []):
+                    processed.append({
+                        "rowId": row_id,                       # still keep rowId for damage link
+                        "scenario_name": d.get("name", ""),
+                        "node": d.get("node", ""),
+                        "nodeId": d.get("nodeId", ""),
+                        "property": prop.get("name", ""),
+                        "threat_id": prop.get("id"),           # <-- use this instead of rowId
+                        "threat_key": f"TS{prop.get('key', 0):03}"
+                    })
     return processed
 
-def generate_attack_trees_with_gemini(threat_scenarios, model_id):
+import json
+import re
+import uuid
+
+def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=None):
     """
     Given a list of threat_scenarios and a model_id, call Gemini to generate attack trees.
-    Returns the parsed attack tree data (dict).
+    If user_prompt is provided, it replaces the default natural language instructions
+    but still keeps the same JSON data structure format.
     """
-    prompt = f"""
+    # --- Default Natural Language Prompt ---
+    default_prompt = """
 You are an expert in cyber threat modeling. Given the following derived threat scenarios, select the top 2 most critical scenarios and generate attack trees for each.
 Each scenario includes:
 - scenario_name: the name of the scenario
 - nodeId: the component's unique ID
-- type: for the nodes use "Event".The first node must be the threat scenario and type default 
+- type: for the nodes use "Event". The first node must be the threat scenario and type default
 - rowId: unique scenario identifier.
 
 RULES FOR ATTACK TREE GENERATION:
-1. Every attack tree MUST have at least one gate (OR Gate or AND Gate)..
+1. Every attack tree MUST have at least one gate (OR Gate or AND Gate).
 2. The root node should be the threat scenario (type: "default")
 3. Events must be connected through gates - never directly to other events
 4. Include realistic attack steps that would lead to the threat scenario
 
 Return the result in the following JSON format (one scene per scenario):
+"""
 
+    # --- Data Structure Format Prompt ---
+    data_structure_prompt = f"""
+(for Data structure)
 {{
   "model_id": "{model_id}",
   "type": "attack_trees",
@@ -640,14 +659,14 @@ Return the result in the following JSON format (one scene per scenario):
     {{
       "ID": "uuid",
       "Name": "Attack Tree Name",
-      "threat_id": "rowId from scenario",
+      "threat_id": "threat_id from props (not rowId)",
       "templates": {{
         "nodes": [
           {{
             "id": "node1",
             "name": "Root Threat",
             "type": "default",
-            "threat_id": "rowId"
+            "threat_id": "same threat_id"
           }},
           {{
             "id": "node2",
@@ -686,7 +705,12 @@ IMPORTANT:
 - Make the attack trees realistic with plausible attack steps
 - Return ONLY valid JSON.
 """
-    gemini_response = model.generate_content(prompt)
+
+    # Use user prompt if provided, otherwise fallback to default
+    final_prompt = (user_prompt or default_prompt) + data_structure_prompt
+
+    gemini_response = model.generate_content(final_prompt)
+
     try:
         content_text = (
             gemini_response.text
@@ -696,7 +720,6 @@ IMPORTANT:
         cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
         return json.loads(cleaned)
     except Exception as e:
-        # print("Gemini Output:", gemini_response)
         raise ValueError(f"Failed to parse Gemini attack tree response: {str(e)}")
 
 
@@ -705,6 +728,7 @@ def generate_attack_tree():
     try:
         # 1. Get model_id from request
         model_id = request.form.get('modelId', '')
+        user_prompt = request.form.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -724,7 +748,7 @@ def generate_attack_tree():
 
         # 4. Generate attack trees using Gemini
         try:
-            attack_tree_data = generate_attack_trees_with_gemini(processed_scenarios, model_id)
+            attack_tree_data = generate_attack_trees_with_gemini(processed_scenarios, model_id, user_prompt)
         except Exception as e:
             return jsonify({"error": f"Failed to generate attack trees: {str(e)}"}), 500
 
@@ -741,11 +765,12 @@ def generate_attack_tree():
 
 
                 scenes.append({
-                    "ID": scene.get("ID"),
-                    "Name": scene.get("Name"),
-                    "threat_id": scene.get("threat_id"),
-                    "templates": structured_templates
-                })
+                "ID": scene.get("ID"),
+                "Name": scene.get("Name"),
+                "threat_id": scene.get("threat_id"),   # now this comes from props id
+                "templates": structured_templates
+            })
+
 
                 # print("scenes", scenes)
                 # return jsonify(scenes), 200
@@ -769,7 +794,7 @@ def generate_attack_tree():
         return jsonify(attack_tree_data), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in attack tree": str(e)}), 500
 
 # Attacks
 # Map ratings from AttackTableoptions for quick lookup
@@ -797,24 +822,32 @@ def calculate_attack_feasibility(scene):
 
 
 # Attacks creattion
-def generate_possible_attacks_with_gemini(threat_scenarios, model_id):
+def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_prompt=None):
     """
     Given derived threat scenarios, generate possible attacks for each scenario using Gemini.
     Returns parsed JSON without rating; rating is computed here.
+    If user_prompt is provided, it replaces the default instructions,
+    while the JSON data structure format remains unchanged.
     """
+
     options = {
-        # "Approach": [opt["value"] for opt in AttackTableoptions["Approach"]],
         "Elapsed Time": [opt["value"] for opt in AttackTableoptions["Elapsed Time"]],
         "Expertise": [opt["value"] for opt in AttackTableoptions["Expertise"]],
         "Knowledge of the Item": [opt["value"] for opt in AttackTableoptions["Knowledge of the Item"]],
         "Window of Opportunity": [opt["value"] for opt in AttackTableoptions["Window of Opportunity"]],
-        "Equipment": [opt["value"] for opt in AttackTableoptions["Equipment"]]
+        "Equipment": [opt["value"] for opt in AttackTableoptions["Equipment"]],
     }
 
-    prompt = f"""
+    # --- Default Instructions ---
+    default_prompt = f"""
 You are an expert in cyber threat analysis.  
 For each of the following derived threat scenarios, create one realistic possible attack.
 
+"""
+
+    # --- Data Structure Prompt ---
+    data_structure_prompt = f"""
+(for Data structure)
 Rules:
 1. For each attack, use exactly these fields:
    - ID: UUID
@@ -847,7 +880,12 @@ Format:
 Here are the derived threat scenarios:
 {json.dumps(threat_scenarios, indent=2)}
 """
-    gemini_response = model.generate_content(prompt)
+
+    # Use user prompt if provided, otherwise fallback to default
+    final_prompt = (user_prompt or default_prompt) + data_structure_prompt
+
+    gemini_response = model.generate_content(final_prompt)
+
     try:
         content_text = (
             gemini_response.text
@@ -858,13 +896,12 @@ Here are the derived threat scenarios:
         return json.loads(cleaned)
     except Exception as e:
         raise ValueError(f"Failed to parse Gemini attack response: {str(e)}")
-
-
 @modelprompt.route('/v1/generate/attacks', methods=['POST'])
 def generate_attacks():
     try:
         # 1. Get model_id
         model_id = request.form.get('modelId', '')
+        user_prompt = request.form.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -882,7 +919,7 @@ def generate_attacks():
         processed_scenarios = preprocess_threat_scenarios(threat_scenarios)
 
         # 4. Generate attacks (no rating yet)
-        attack_data = generate_possible_attacks_with_gemini(processed_scenarios, model_id)
+        attack_data = generate_possible_attacks_with_gemini(processed_scenarios, model_id, user_prompt)
 
         # 5. Compute ratings
         for scene in attack_data.get("scenes", []):
@@ -907,12 +944,19 @@ def generate_attacks():
         return jsonify(attack_data), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in attacks": str(e)}), 500
 
 
 # convertion of events to attack and requirements
-def filter_possible_events_with_gemini(attack_trees, model_id):
-    prompt = f"""
+def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None):
+    """
+    Given attack_trees and model_id, call Gemini to filter out possible attack events.
+    If user_prompt is provided, it replaces the default natural language instructions,
+    while the JSON data structure format remains unchanged.
+    """
+
+    # --- Default Natural Language Prompt ---
+    default_prompt = f"""
 You are an expert in automotive cyber threat modeling (ISO/SAE 21434).
 
 I will give you a JSON list of attack_trees for a system model (model_id: {model_id}).
@@ -926,22 +970,29 @@ Your task:
   * Are specific enough to warrant a countermeasure
 - Ignore placeholder events (like "Event", "Attack Step"), vague names, or nodes that cannot occur in practice.
 - Return ONLY valid JSON in the exact format:
+"""
 
+    # --- Data Structure Prompt ---
+    data_structure_prompt = """
+(for Data structure)
 [
-  {{
+  {
     "attack_tree_scene_id": "scene ID of the attack tree",
     "attack_tree_scene_name": "scene Name of the attack tree",
     "event_id": "node ID of the Event",
     "event_name": "name of the Event",
     "threat_id": "threat_id from the attack tree scene",
     "threat_key": "threat key if available, else null"
-  }}
+  }
 ]
 
 Here are the attack_trees:
-{json.dumps(attack_trees, indent=2)}
-"""
-    gemini_response = model.generate_content(prompt)
+""" + json.dumps(attack_trees, indent=2)
+
+    # Use user prompt if provided, otherwise fallback to default
+    final_prompt = (user_prompt or default_prompt) + data_structure_prompt
+
+    gemini_response = model.generate_content(final_prompt)
 
     try:
         content_text = (
@@ -950,7 +1001,7 @@ Here are the attack_trees:
             else gemini_response.candidates[0].content.parts[0].text
         )
 
-        # Extract JSON using regex in case Gemini adds extra text
+        # Extract JSON array in case Gemini adds explanation
         match = re.search(r"\[\s*\{.*\}\s*\]", content_text, re.DOTALL)
         if not match:
             raise ValueError(f"No JSON array found in Gemini output:\n{content_text}")
@@ -959,8 +1010,7 @@ Here are the attack_trees:
         return json.loads(json_str)
 
     except Exception as e:
-        raise ValueError(f"Failed to parse Gemini possible events: {str(e)}")
-    
+        raise ValueError(f"Failed to parse Gemini possible events: {str(e)}")   
 def convert_possible_events(possible_events, model_id):
     """
     Converts possible event nodes into Attacks (type: attack)
@@ -1024,6 +1074,7 @@ def convert_possible_events(possible_events, model_id):
 def convert_possible_events_from_attack_trees():
     try:
         model_id = request.form.get("modelId", "")
+        user_prompt = request.form.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -1035,7 +1086,7 @@ def convert_possible_events_from_attack_trees():
         attack_trees = attack_trees_doc.get("scenes", [])
 
         # Ask Gemini to filter possible events
-        possible_events = filter_possible_events_with_gemini(attack_trees, model_id)
+        possible_events = filter_possible_events_with_gemini(attack_trees, model_id, user_prompt)
 
         # Convert to Attacks + Cybersecurity Requirements
         convert_possible_events(possible_events, model_id)
@@ -1043,7 +1094,7 @@ def convert_possible_events_from_attack_trees():
         return jsonify({"message": "Possible events converted successfully", "converted": possible_events}), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in converting possible events" : str(e)}), 500
      
 #6 - Cybersecurity Generation
 def extract_json_block(text):
@@ -1113,38 +1164,51 @@ def generate_cybersecurity_artifacts():
     """
     Generate and save cybersecurity requirements, controls, goals, and claims
     for a given modelId and systemName, each stored as a document in db.Cybersecurity.
+    If user_prompt is provided, it replaces the default natural language instructions,
+    while the JSON data structure format remains unchanged.
     """
     try:
         model_id = request.form.get('modelId', '')
         system_name = request.form.get('systemName', '')
+        user_prompt = request.form.get('cybersecurityPrompt', '')
 
         if not model_id or not system_name:
             return jsonify({"error": "Missing modelId or systemName"}), 400
 
-        prompt = f"""
-            Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals and cybersecurity_claims for the system '{system_name}'.
-            Return ONLY valid JSON in the following format (no explanation or extra text):
+        # --- Default Instructions ---
+        default_prompt = f"""
+You are an expert in cybersecurity engineering (ISO/SAE 21434).
+Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals, 
+and cybersecurity_claims for the system '{system_name}'.
+Return ONLY valid JSON in the format below (no explanation or extra text):
+"""
 
-            {{
-            "cybersecurity_requirements": {{
-                "scenes": [{{"ID": "<uuid>", "Name": "<requirement name>", "Description": "<description>", "threat_id": null}}]
-            }},
-            "cybersecurity_controls": {{
-                "scenes": [{{"ID": "<uuid>", "Name": "<control name>", "Description": "<description>", "threat_id": null}}]
-            }},
-            "cybersecurity_claims": {{
-                "scenes": [{{"ID": "<uuid>", "Name": "<claim name>", "Description": "<description>", "threat_id": null}}]
-            }},
-            "cybersecurity_goals": {{
-                "scenes": [{{"ID": "<uuid>", "Name": "<goal name>", "Description": "<description>", "threat_id": null}}]
-            }}
-            }}
+        # --- Data Structure Format ---
+        data_structure_prompt = """
+(for Data structure)
+{
+  "cybersecurity_requirements": {
+    "scenes": [{"ID": "<uuid>", "Name": "<requirement name>", "Description": "<description>", "threat_id": null}]
+  },
+  "cybersecurity_controls": {
+    "scenes": [{"ID": "<uuid>", "Name": "<control name>", "Description": "<description>", "threat_id": null}]
+  },
+  "cybersecurity_claims": {
+    "scenes": [{"ID": "<uuid>", "Name": "<claim name>", "Description": "<description>", "threat_id": null}]
+  },
+  "cybersecurity_goals": {
+    "scenes": [{"ID": "<uuid>", "Name": "<goal name>", "Description": "<description>", "threat_id": null}]
+  }
+}
 
-            - Each section must have a "scenes" array as shown.
-            - Do NOT include any explanation or extra text.
-        """
+- Each section must have a "scenes" array as shown.
+- Do NOT include any explanation or extra text.
+"""
 
-        gemini_response = model.generate_content(prompt)
+        # Use user prompt if provided, otherwise fallback to default
+        final_prompt = (user_prompt or default_prompt) + data_structure_prompt
+
+        gemini_response = model.generate_content(final_prompt)
         content_text = (
             gemini_response.text
             if hasattr(gemini_response, 'text')
@@ -1188,7 +1252,7 @@ def generate_cybersecurity_artifacts():
         return jsonify(response), 200
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in generate_cybersecurity": str(e)}), 500
 
 # 7 - Generate Full Model
 @modelprompt.route('/v1/generate/full-model', methods=['POST'])
@@ -1196,11 +1260,12 @@ def generate_full_model():
     try:
         # Generate template
         template_response = generate_reactflow_template(standalone=True, request_data=request)
-
+        # print("Template Response:", template_response)
         scenario_request = {
             'modelId': template_response['model_id'],
             'systemName': template_response['system_name'],
-            'template': json.dumps(template_response['template'])
+            'template': json.dumps(template_response['template']),
+            "damageScenarioPrompt": request.form.get('damageScenarioPrompt', ''),
         }
 
         # Generate damage scenarios
@@ -1217,25 +1282,36 @@ def generate_full_model():
 
         # risk treatment
         for threat in threat_data.get("scenarios", {}).get("Details", []):
-                    for item in threat.get("Details", []):
-                        for prop in item.get("props", []):
-                            # This mimics your add_risk_treatment()
-                            db.Risk_treatment.update_one(
-                                {"model_id": template_response['model_id']},
-                                {
-                                    "$addToSet": {
-                                        "Details": {
-                                            "id": str(uuid.uuid4()),
-                                            "threat_id": threat.get("threatId"),
-                                            "node_id": item["nodeId"],
-                                            "label": item.get("label"),
-                                            "damage_id": prop.get("damageId"),
-                                            "threat_key": threat.get("key"),
-                                        }
-                                    }
-                                },
-                                upsert=True
-                            )
+            damage_id = threat.get("rowId")
+            damage_name = threat.get("damage_name")
+            damage_key = threat.get("id")  # e.g., DS001, DS002
+
+            for item in threat.get("Details", []):
+                node_id = item.get("nodeId")
+                node_name = item.get("name")
+
+                for prop in item.get("props", []):
+                    # Use threat_type mapper for STRIDE category
+                    stride_category = threat_type(prop.get("name", ""))
+                    threat_key = f"TS{prop['key']:03}"
+
+                    # Build consistent label
+                    label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
+
+                    with current_app.test_request_context(
+                        method='POST',
+                        data={
+                            "nodeId": node_id,
+                            "threatId": prop["id"],
+                            "modelId": template_response['model_id'],
+                            "label": label,
+                            "damageId": damage_id,
+                            "key": threat_key
+                        }
+                    ):
+                        add_risk_treatment()
+
+
 
         # Prepare threatIds for derived threat scenario generation
         threat_ids = []
@@ -1251,18 +1327,20 @@ def generate_full_model():
         # Generate derived threat scenarios
         derived_data = generate_derived_threat_scenarios(
             model_id=template_response['model_id'],
-            threat_ids=threat_ids
+            threat_ids=threat_ids,
+            user_prompt=request.form.get('threatScenarioPrompt', '')
         )
 
         # Generate attack trees via Flask route
-        with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id']}):
+        with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id'], "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')}):
             attack_response = generate_attack_tree()
             attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
 
         with current_app.test_request_context(
             method='POST',
             data={
-                "modelId":template_response['model_id']
+                "modelId":template_response['model_id'],
+                "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
             }
         ):
             possible_attacks = convert_possible_events_from_attack_trees()
@@ -1271,7 +1349,8 @@ def generate_full_model():
             method='POST',
             data={
                 'modelId': template_response['model_id'],
-                'systemName': template_response['system_name']
+                'systemName': template_response['system_name'],
+                "cybersecurityPrompt": request.form.get('cybersecurityPrompt', '')
             }
         ):
             cyber_response = generate_cybersecurity_artifacts()
@@ -1280,7 +1359,8 @@ def generate_full_model():
         with current_app.test_request_context(
             method='POST',
             data={
-                "modelId":template_response['model_id']
+                "modelId":template_response['model_id'],
+                "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
             }
         ):
             attacks = generate_attacks()
@@ -1298,4 +1378,4 @@ def generate_full_model():
         )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error in generating model": str(e)}), 500
