@@ -244,7 +244,8 @@ def clone_model_or_library():
     try:
         key_id = request.form.get('keyId')
         source = request.form.get('source')  
-        user_id = request.form.get('userId')  
+        user_id = request.form.get('userId')
+        category = request.form.get('category', '')  # Get category from form data
 
         if not key_id or not source:
             return jsonify({'error': 'keyId and source are required'}), 400
@@ -276,6 +277,11 @@ def clone_model_or_library():
         root_doc['_id'] = ObjectId(new_root_id)
         if target_collection == 'Models':
             root_doc['user_id'] = user_id  # Only assign user_id when saving into Models
+            # Set category from form data if provided, otherwise keep existing or set to empty
+            root_doc['category'] = category if category else root_doc.get('category', '')
+        elif target_collection == 'Libraries':
+            # Set category from form data if provided, otherwise keep existing or set to empty
+            root_doc['category'] = category if category else root_doc.get('category', '')
 
         model_name = root_doc.get('name')
         db[target_collection].insert_one(root_doc)
@@ -303,7 +309,7 @@ def clone_model_or_library():
 @app.route('/v1/listLibraries', methods=['GET'])
 def list_libraries():
     try:
-        libraries = list(db['Libraries'].find({}, {'_id': 1, 'name': 1}))
+        libraries = list(db['Libraries'].find({}, {'_id': 1, 'name': 1, 'category': 1}))
 
         # Convert ObjectId to string
         for lib in libraries:
