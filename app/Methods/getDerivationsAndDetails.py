@@ -5,7 +5,10 @@ import uuid
 def uid():
     return str(uuid.uuid4())
 
-def getDerivationsAndDetails(template, existing_details):
+def getDerivationsAndDetails(template, existing_details=None):
+    if existing_details is None:
+        existing_details = {}
+
     nodes = template.get("nodes", [])
     edges = template.get("edges", [])
     Derivations = []
@@ -32,7 +35,7 @@ def getDerivationsAndDetails(template, existing_details):
                 {
                     "nodeId": node.get("id"),
                     "name": node.get("data", {}).get("label"),
-                    "type":node.get("type"),
+                    "type": node.get("type"),
                     "props": [
                         {"name": pr, "id": existing_details.get(node.get("id"), {}).get(pr, uid())}
                         for pr in node.get("properties", [])
@@ -59,7 +62,7 @@ def getDerivationsAndDetails(template, existing_details):
             {
                 "nodeId": edge.get("id"),
                 "name": edge.get("data", {}).get("label"),
-                "type":edge.get("type"),
+                "type": edge.get("type"),
                 "props": [
                     {"name": prop, "id": existing_details.get(edge.get("id"), {}).get(prop, uid())}
                     for prop in edge.get("properties", [])
