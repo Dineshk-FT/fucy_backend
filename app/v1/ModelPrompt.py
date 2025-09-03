@@ -1280,110 +1280,110 @@ def generate_full_model():
         # Generate template
         template_response = generate_reactflow_template(standalone=True, request_data=request)
         # print("Template Response:", template_response)
-        scenario_request = {
-            'modelId': template_response['model_id'],
-            'systemName': template_response['system_name'],
-            'template': json.dumps(template_response['template']),
-            "damageScenarioPrompt": request.form.get('damageScenarioPrompt', ''),
-        }
+        # scenario_request = {
+        #     'modelId': template_response['model_id'],
+        #     'systemName': template_response['system_name'],
+        #     'template': json.dumps(template_response['template']),
+        #     "damageScenarioPrompt": request.form.get('damageScenarioPrompt', ''),
+        # }
 
-        # Generate damage scenarios
-        scenarios_response = create_damage_scenarios(
-            standalone=True, 
-            request_data=type('', (), {'form': scenario_request})()
-        )
-        scenarios_data = scenarios_response.get_json() if hasattr(scenarios_response, 'get_json') else scenarios_response
+        # # Generate damage scenarios
+        # scenarios_response = create_damage_scenarios(
+        #     standalone=True, 
+        #     request_data=type('', (), {'form': scenario_request})()
+        # )
+        # scenarios_data = scenarios_response.get_json() if hasattr(scenarios_response, 'get_json') else scenarios_response
 
-        # Generate threat scenarios
-        threat_response = create_threat_scenarios(template_response['model_id'])
-        threat_response_obj, _ = threat_response if isinstance(threat_response, tuple) else (threat_response, None)
-        threat_data = threat_response_obj.get_json()
+        # # Generate threat scenarios
+        # threat_response = create_threat_scenarios(template_response['model_id'])
+        # threat_response_obj, _ = threat_response if isinstance(threat_response, tuple) else (threat_response, None)
+        # threat_data = threat_response_obj.get_json()
 
-        # risk treatment
-        for threat in threat_data.get("scenarios", {}).get("Details", []):
-            damage_id = threat.get("rowId")
-            damage_name = threat.get("damage_name")
-            damage_key = threat.get("id")  # e.g., DS001, DS002
+        # # risk treatment
+        # for threat in threat_data.get("scenarios", {}).get("Details", []):
+        #     damage_id = threat.get("rowId")
+        #     damage_name = threat.get("damage_name")
+        #     damage_key = threat.get("id")  # e.g., DS001, DS002
 
-            for item in threat.get("Details", []):
-                node_id = item.get("nodeId")
-                node_name = item.get("name")
+        #     for item in threat.get("Details", []):
+        #         node_id = item.get("nodeId")
+        #         node_name = item.get("name")
 
-                for prop in item.get("props", []):
-                    # Use threat_type mapper for STRIDE category
-                    stride_category = threat_type(prop.get("name", ""))
-                    threat_key = f"TS{prop['key']:03}"
+        #         for prop in item.get("props", []):
+        #             # Use threat_type mapper for STRIDE category
+        #             stride_category = threat_type(prop.get("name", ""))
+        #             threat_key = f"TS{prop['key']:03}"
 
-                    # Build consistent label
-                    label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
+        #             # Build consistent label
+        #             label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
 
-                    with current_app.test_request_context(
-                        method='POST',
-                        data={
-                            "nodeId": node_id,
-                            "threatId": prop["id"],
-                            "modelId": template_response['model_id'],
-                            "label": label,
-                            "damageId": damage_id,
-                            "key": threat_key
-                        }
-                    ):
-                        add_risk_treatment()
+        #             with current_app.test_request_context(
+        #                 method='POST',
+        #                 data={
+        #                     "nodeId": node_id,
+        #                     "threatId": prop["id"],
+        #                     "modelId": template_response['model_id'],
+        #                     "label": label,
+        #                     "damageId": damage_id,
+        #                     "key": threat_key
+        #                 }
+        #             ):
+        #                 add_risk_treatment()
 
 
 
-        # Prepare threatIds for derived threat scenario generation
-        threat_ids = []
-        for threat in threat_data.get("scenarios", {}).get("Details", []):
-            for item in threat.get("Details", []):
-                for prop in item.get("props", []):
-                    threat_ids.append({
-                        "nodeId": item["nodeId"],
-                        "propId": prop["id"],
-                        "rowId": threat["rowId"]
-                    })
+        # # Prepare threatIds for derived threat scenario generation
+        # threat_ids = []
+        # for threat in threat_data.get("scenarios", {}).get("Details", []):
+        #     for item in threat.get("Details", []):
+        #         for prop in item.get("props", []):
+        #             threat_ids.append({
+        #                 "nodeId": item["nodeId"],
+        #                 "propId": prop["id"],
+        #                 "rowId": threat["rowId"]
+        #             })
 
-        # Generate derived threat scenarios
-        derived_data = generate_derived_threat_scenarios(
-            model_id=template_response['model_id'],
-            threat_ids=threat_ids,
-            user_prompt=request.form.get('threatScenarioPrompt', '')
-        )
+        # # Generate derived threat scenarios
+        # derived_data = generate_derived_threat_scenarios(
+        #     model_id=template_response['model_id'],
+        #     threat_ids=threat_ids,
+        #     user_prompt=request.form.get('threatScenarioPrompt', '')
+        # )
 
-        # Generate attack trees via Flask route
-        with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id'], "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')}):
-            attack_response = generate_attack_tree()
-            attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
+        # # Generate attack trees via Flask route
+        # with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id'], "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')}):
+        #     attack_response = generate_attack_tree()
+        #     attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
 
-        with current_app.test_request_context(
-            method='POST',
-            data={
-                "modelId":template_response['model_id'],
-                "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
-            }
-        ):
-            possible_attacks = convert_possible_events_from_attack_trees()
-        # Generate cybersecurity artifacts via test request context
-        with current_app.test_request_context(
-            method='POST',
-            data={
-                'modelId': template_response['model_id'],
-                'systemName': template_response['system_name'],
-                "cybersecurityPrompt": request.form.get('cybersecurityPrompt', '')
-            }
-        ):
-            cyber_response = generate_cybersecurity_artifacts()
-            # cyber_data = cyber_response.get_json() if hasattr(cyber_response, 'get_json') else {}
+        # with current_app.test_request_context(
+        #     method='POST',
+        #     data={
+        #         "modelId":template_response['model_id'],
+        #         "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
+        #     }
+        # ):
+        #     possible_attacks = convert_possible_events_from_attack_trees()
+        # # Generate cybersecurity artifacts via test request context
+        # with current_app.test_request_context(
+        #     method='POST',
+        #     data={
+        #         'modelId': template_response['model_id'],
+        #         'systemName': template_response['system_name'],
+        #         "cybersecurityPrompt": request.form.get('cybersecurityPrompt', '')
+        #     }
+        # ):
+        #     cyber_response = generate_cybersecurity_artifacts()
+        #     # cyber_data = cyber_response.get_json() if hasattr(cyber_response, 'get_json') else {}
 
-        with current_app.test_request_context(
-            method='POST',
-            data={
-                "modelId":template_response['model_id'],
-                "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
-            }
-        ):
-            attacks = generate_attacks()
-            # attack_data = attacks.get_json() if hasattr(attacks, 'get_json') else {}
+        # with current_app.test_request_context(
+        #     method='POST',
+        #     data={
+        #         "modelId":template_response['model_id'],
+        #         "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
+        #     }
+        # ):
+        #     attacks = generate_attacks()
+        #     # attack_data = attacks.get_json() if hasattr(attacks, 'get_json') else {}
 
         return current_app.response_class(
             response=json.dumps({

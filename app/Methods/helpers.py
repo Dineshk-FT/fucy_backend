@@ -13,6 +13,7 @@ import datetime
 import uuid
 import json
 import re
+import math
 
 def get_highest_impact(impacts):
     # impact_order = ["Severe", "Major", "Moderate", "Minor", "Negligible"]
@@ -135,7 +136,9 @@ def getFesRateBgColor(rating):
     return rating_color.get(rating,None)
 
 
-# Constants for layout
+import math
+
+# Constants for layout (minimums, never go below these)
 DEFAULT_NODE_WIDTH = 180
 DEFAULT_NODE_HEIGHT = 60
 DEFAULT_GROUP_WIDTH = 700
@@ -149,9 +152,33 @@ UNGROUPED_START_X = 100
 UNGROUPED_START_Y = 800  # Start ungrouped nodes below all groups
 MIN_CLEARANCE = 100      # Minimum space between any two elements
 
+# Label sizing estimates
+CHAR_WIDTH = 8          # Approximate pixel width per character
+LINE_HEIGHT = 20        # Height of a text line
+MAX_CHARS_PER_LINE = 20 # Wrap after ~20 characters
+MAX_NODE_WIDTH = 400    # Cap so nodes don’t get crazy wide
+
+
+def estimate_node_size(label):
+    """Estimate width/height of node based on label text length with wrapping"""
+    lines = max(1, math.ceil(len(label) / MAX_CHARS_PER_LINE))
+    est_width = min(
+        max(DEFAULT_NODE_WIDTH, min(len(label), MAX_CHARS_PER_LINE) * CHAR_WIDTH + 40),
+        MAX_NODE_WIDTH,
+    )
+    est_height = max(DEFAULT_NODE_HEIGHT, lines * LINE_HEIGHT + 20)  # +20 padding
+    return est_width, est_height
+
+
 def build_basic_node(node):
-    """Create node structure without positioning"""
+    """Create node structure with adaptive sizing"""
     is_group = node["type"] == "group"
+
+    if not is_group:
+        width, height = estimate_node_size(node["data"]["label"])
+    else:
+        width, height = DEFAULT_GROUP_WIDTH, DEFAULT_GROUP_HEIGHT  # placeholder, adjust later
+
     return {
         "id": node["id"],
         "type": node["type"],
@@ -167,83 +194,112 @@ def build_basic_node(node):
                 "fontFamily": "Inter",
                 "fontSize": "14px",
                 "fontWeight": 500,
-                "height": DEFAULT_GROUP_HEIGHT if is_group else DEFAULT_NODE_HEIGHT,
-                "width": DEFAULT_GROUP_WIDTH if is_group else DEFAULT_NODE_WIDTH,
+                "height": height,
+                "width": width,
             },
         },
-        "width": DEFAULT_GROUP_WIDTH if is_group else DEFAULT_NODE_WIDTH,
-        "height": DEFAULT_GROUP_HEIGHT if is_group else DEFAULT_NODE_HEIGHT,
+        "width": width,
+        "height": height,
         "parentId": node.get("parentId"),
         "properties": node.get("properties", []),
     }
+
+
+def adjust_group_sizes(nodes):
+    """Recalculate group sizes based on children inside them"""
+    groups = [n for n in nodes if n["type"] == "group"]
+
+    for group in groups:
+        children = [n for n in nodes if n.get("parentId") == group["id"]]
+        if not children:
+            continue
+
+        # Compute grid layout requirements
+        max_per_row = max(1, (DEFAULT_GROUP_WIDTH - 2 * GROUP_PADDING) // NODE_SPACING_X)
+        rows = math.ceil(len(children) / max_per_row)
+
+        max_child_width = max(c["width"] for c in children)
+        max_child_height = max(c["height"] for c in children)
+
+        total_width = max_per_row * (max_child_width + NODE_SPACING_X) - NODE_SPACING_X
+        total_height = rows * (max_child_height + NODE_SPACING_Y) - NODE_SPACING_Y
+
+        est_width = total_width + 2 * GROUP_PADDING
+        est_height = total_height + 2 * GROUP_PADDING
+
+        # Enforce minimums
+        group["width"] = max(DEFAULT_GROUP_WIDTH, est_width)
+        group["height"] = max(DEFAULT_GROUP_HEIGHT, est_height)
+        group["data"]["style"]["width"] = group["width"]
+        group["data"]["style"]["height"] = group["height"]
+
+    return nodes
+
 
 def calculate_node_positions(nodes):
     """Carefully position all nodes with proper spacing"""
     groups = [n for n in nodes if n["type"] == "group"]
     other_nodes = [n for n in nodes if n["type"] != "group"]
-    
+
     # Position groups in a row with spacing
     current_x = 100
     current_y = 100
-    
+
     for group in groups:
         group["position"]["x"] = current_x
         group["position"]["y"] = current_y
-        
+
         # Next group moves right with spacing
         current_x += group["width"] + GROUP_HORIZONTAL_SPACING
-        
+
         # If we're running out of horizontal space, start new row
         if current_x > 2500:  # Arbitrary reasonable limit
             current_x = 100
             current_y += group["height"] + GROUP_VERTICAL_SPACING
-    
+
     # Position child nodes within their groups
     for group in groups:
         children = [n for n in other_nodes if n.get("parentId") == group["id"]]
-        
+
         # Calculate grid layout within group
         max_per_row = max(1, (group["width"] - 2 * GROUP_PADDING) // NODE_SPACING_X)
-        
+
         for i, child in enumerate(children):
             row = i // max_per_row
             col = i % max_per_row
-            
+
             child["position"]["x"] = (
-                group["position"]["x"] + 
-                GROUP_PADDING + 
-                col * NODE_SPACING_X
+                group["position"]["x"] + GROUP_PADDING + col * NODE_SPACING_X
             )
             child["position"]["y"] = (
-                group["position"]["y"] + 
-                GROUP_PADDING + 
-                row * NODE_SPACING_Y
+                group["position"]["y"] + GROUP_PADDING + row * NODE_SPACING_Y
             )
-    
+
     # Position ungrouped nodes in a separate area below
     ungrouped = [n for n in other_nodes if not n.get("parentId")]
-    
+
     current_ungrouped_x = UNGROUPED_START_X
     current_ungrouped_y = UNGROUPED_START_Y
     max_row_width = 0
-    
+
     for node in ungrouped:
         # If node would go off screen, move to next row
         if current_ungrouped_x + node["width"] > 2500:  # Arbitrary reasonable limit
             current_ungrouped_x = UNGROUPED_START_X
             current_ungrouped_y += node["height"] + MIN_CLEARANCE
-        
+
         node["position"]["x"] = current_ungrouped_x
         node["position"]["y"] = current_ungrouped_y
-        
+
         # Move right for next node
         current_ungrouped_x += node["width"] + NODE_SPACING_X
         max_row_width = max(max_row_width, current_ungrouped_x)
-    
+
     # Ensure final layout has no overlaps
     verify_no_overlaps(nodes)
-    
+
     return nodes
+
 
 def verify_no_overlaps(nodes):
     """Double-check that no nodes overlap"""
@@ -251,22 +307,21 @@ def verify_no_overlaps(nodes):
         for j, b in enumerate(nodes):
             if i >= j:
                 continue  # Don't compare twice or with self
-            
+
             a_left = a["position"]["x"]
             a_right = a_left + a["width"]
             a_top = a["position"]["y"]
             a_bottom = a_top + a["height"]
-            
+
             b_left = b["position"]["x"]
             b_right = b_left + b["width"]
             b_top = b["position"]["y"]
             b_bottom = b_top + b["height"]
-            
+
             # Check for overlap
-            if not (a_right < b_left or a_left > b_right or 
+            if not (a_right < b_left or a_left > b_right or
                     a_bottom < b_top or a_top > b_bottom):
                 print(f"Warning: Potential overlap between {a['id']} and {b['id']}")
-                # In a real implementation, you'd adjust positions here
 
 
 def build_full_edge(edge):
