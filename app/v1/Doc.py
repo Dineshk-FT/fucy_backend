@@ -15,7 +15,7 @@ import os
 import io
 from config import Config
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, PageBreak
-
+from svglib.svglib import svg2rlg
 
 app = Blueprint("doc", __name__)
 max_width = 1000  # adjust to fit your frame size
@@ -33,16 +33,7 @@ def generate_doc():
         model_id = request.form.get("model-id")
 
          # Get image file from request
-        image_file = request.files.get('image')  # 'image' is the name of the file input in the frontend
-        if image_file:
-            # Read the image file into a BytesIO stream
-            image_stream = io.BytesIO(image_file.read())
-            img = Image(image_stream)
-            img.drawWidth, img.drawHeight = fit_image(
-                img.imageWidth, img.imageHeight, max_width, max_height
-            )
-        else:
-            image_stream = None
+
 
         if 'damageScenariosTable' in request.form and int(request.form['damageScenariosTable']) == 1:
             damage_scenarios_table = 1
@@ -1079,16 +1070,18 @@ def generate_doc():
         elements = []
 
         # Add Image to the PDF if provided
-        if image_stream:
-            elements.append(Table([["Model Image"]], colWidths=[500], style=[
+        svg_file = request.files.get('svg')
+        if svg_file:
+            svg_content = svg_file.read().decode('utf-8')
+            svg_stream = io.BytesIO(svg_content.encode('utf-8'))
+            drawing = svg2rlg(svg_stream)
+
+            elements.append(Table([["Model Diagram"]], colWidths=[500], style=[
                 ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, -1), 14),
-                # ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
-            ],hAlign='LEFT'))
-            elements.append(Spacer(1, 12))  # Add spacing (1 unit wide, 12 points tall)
-            img = resize_image(image_stream, max_width=800, max_height=800)  # Adjust max size as needed
-            img.hAlign = 'LEFT'
-            elements.append(img)
+            ], hAlign='LEFT'))
+            elements.append(Spacer(1, 12))
+            elements.append(drawing)  # stays vector!
             elements.append(PageBreak())
 
         if damage_scenarios_table == 1:

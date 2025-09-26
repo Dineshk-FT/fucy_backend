@@ -293,3 +293,35 @@ def delete_model():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# Collections to clear
+collections_to_clear = [
+    "Assets",
+    "Damage_scenarios",
+    "Threat_scenrios",
+    "Cybersecurity",
+    "Attacks",
+    "Risk_treatment"
+]
+
+@app.route("/v1/clear_model_data", methods=["POST"])
+def clear_model_data():
+    try:
+        model_id = request.form.get("modelId")
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        deleted_counts = {}
+
+        # Go through each collection and delete docs with model_id
+        for collection in collections_to_clear:
+            result = db[collection].delete_many({"model_id": model_id})
+            deleted_counts[collection] = result.deleted_count
+
+        return jsonify({
+            "message": f"Data cleared for model_id {model_id}",
+            "deleted_counts": deleted_counts
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

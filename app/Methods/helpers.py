@@ -135,9 +135,6 @@ def getFesRateBgColor(rating):
     }
     return rating_color.get(rating,None)
 
-
-import math
-
 # Constants for layout (minimums, never go below these)
 DEFAULT_NODE_WIDTH = 180
 DEFAULT_NODE_HEIGHT = 60
@@ -146,11 +143,11 @@ DEFAULT_GROUP_HEIGHT = 500
 GROUP_PADDING = 60
 GROUP_HORIZONTAL_SPACING = 600  # Space between groups
 GROUP_VERTICAL_SPACING = 300    # Vertical space if we stack groups
-NODE_SPACING_X = 200
-NODE_SPACING_Y = 120
+NODE_SPACING_X = 220
+NODE_SPACING_Y = 150
 UNGROUPED_START_X = 100
 UNGROUPED_START_Y = 800  # Start ungrouped nodes below all groups
-MIN_CLEARANCE = 100      # Minimum space between any two elements
+MIN_CLEARANCE = 120      # Minimum space between any two elements
 
 # Label sizing estimates
 CHAR_WIDTH = 8          # Approximate pixel width per character

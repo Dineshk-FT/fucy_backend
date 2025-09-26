@@ -21,3 +21,4 @@ Werkzeug==3.0.3
 azure-storage-blob==12.16.0
 stripe==12.4.0
 dotenv==0.9.9
+svglib==1.5.1

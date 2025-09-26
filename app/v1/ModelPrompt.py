@@ -14,8 +14,9 @@ import string
 from collections import defaultdict
 from datetime import datetime
 from bson import ObjectId
-
-
+import traceback
+from werkzeug.datastructures import MultiDict
+import time
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -152,7 +153,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             Include :
             - Nodes must have: id, type ("default" or "group"), data.label, properties.
             - Edges must have: id, type ("step"), source, target, sourceHandle, targetHandle, data.label, properties.
-            - Properties should contain only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
+            - A node's properties must be a list of one or more of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization. Properties must contain only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
 
             Constraints:
             - If multiple related nodes exist, create possible group node to contain them.
@@ -293,133 +294,153 @@ def generate_object_id():
     return ''.join(random.choices(string.hexdigits.lower(), k=24))
 
 # Wrapper Flask endpoint
+@modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
 def create_damage_scenarios(standalone=False, request_data=None):
     """Core function to generate damage scenarios (can be called standalone or as route)"""
-    # try:
-    req_data = request_data if request_data else request
+    try:
+        req_data = request_data if request_data else request
 
-    model_id = req_data.form.get('modelId')
-    system_name = req_data.form.get('systemName', '')
-    template_raw = req_data.form.get('template', '{}')
-    user_prompt = req_data.form.get('damageScenarioPrompt', '')  # 👈 Optional user prompt
+        model_id = req_data.form.get('modelId')
+        system_name = req_data.form.get('systemName', '')
+        template_raw = req_data.form.get('template', '{}')
+        user_prompt = req_data.form.get('damageScenarioPrompt', '')  # 👈 Optional user prompt
 
-    if not model_id:
-        if standalone:
-            raise ValueError("modelId is required")
-        return jsonify({"error": "modelId is required"}), 400
+        if not model_id:
+            if standalone:
+                raise ValueError("modelId is required")
+            return jsonify({"error": "modelId is required"}), 400
 
-    template = json.loads(template_raw) if template_raw else {}
+        # Parse template safely
+        try:
+            template = json.loads(template_raw) if template_raw else {}
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid template JSON"}), 400
 
-    # Default top part of prompt
-    default_prompt = f"""
-        Generate exactly 2 damage scenarios for the '{system_name}' system in JSON format.
+        print("DEBUG: Parsed template:", template)
 
-        System Components:
-        {json.dumps(template.get('nodes', []), indent=2)}
+        # Build default prompt
+        default_prompt = f"""
+            Generate exactly 2 damage scenarios for the '{system_name}' system in JSON format.
 
-        Relationships:
-        {json.dumps(template.get('edges', []), indent=2)}
+            System Components:
+            {json.dumps(template.get('nodes', []), indent=2)}
 
-        Requirements:
-        1. Create different scenarios targeting different critical components
-        2. Each MUST include:
-        - Damage scenario details
-        - Realistic cyber losses (integrity/confidentiality/availability)
-        - Plausible impact ratings (Major/Moderate/Minor)
+            Relationships:
+            {json.dumps(template.get('edges', []), indent=2)}
+
+            Requirements:
+            1. Create different scenarios targeting different critical components
+            2. Each MUST include:
+            - Damage scenario details
+            - Realistic cyber losses (integrity/confidentiality/availability)
+            - Plausible impact ratings (Major/Moderate/Minor)
+            """
+
+        prompt_intro = user_prompt if user_prompt else default_prompt
+
+        prompt = f"""
+        {prompt_intro}
+
+        (for Data structure)
+        Use EXACTLY this structure:
+        {{
+        "system_name": "{system_name}",
+        "model_id": "{model_id}",
+        "type": "User-defined",
+        "Details": [
+            {{
+            "Description": "damage scenario description",
+            "Name": "damage scenario name",
+            "cyberLosses": [
+                {{
+                "id": "uuid",
+                "name": "loss type",
+                "isSelected": true,
+                "node": "component name",
+                "nodeId": "component_id"
+                }}
+            ],
+            "impacts": {{
+                "Financial Impact": "(Severe/Major/Moderate/Minor/Negligible)",
+                "Safety Impact": "(Severe/Major/Moderate/Minor/Negligible)",
+                "Operational Impact": "(Severe/Major/Moderate/Minor/Negligible)",
+                "Privacy Impact": "(Severe/Major/Moderate/Minor/Negligible)"
+            }},
+            "key": 1,
+            "_id": "scenario_id"
+            }}
+        ]
+        }}
         """
 
-    # Use user prompt if provided, otherwise default
-    prompt_intro = user_prompt if user_prompt else default_prompt
+        print("DEBUG: Final Prompt Sent to Model:\n", prompt)
 
-    # Final prompt = user or default intro + mandatory data structure
-    prompt = f"""
-    {prompt_intro}
+        response = model.generate_content(prompt)
+        raw_output = response.text.strip()
+        print("DEBUG: Raw AI Output:", raw_output)
 
-    (for Data structure)
-    Use EXACTLY this structure:
-    {{
-    "system_name": "{system_name}",
-    "model_id": "{model_id}",
-    "type": "User-defined",
-    "Details": [
-        {{
-        "Description": "damage scenario description",
-        "Name": "damage scenario name",
-        "cyberLosses": [
-            {{
-            "id": "uuid",
-            "name": "loss type",
-            "isSelected": true,
-            "node": "component name",
-            "nodeId": "component_id"
-            }}
-        ],
-        "impacts": {{
-            "Financial Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-            "Safety Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-            "Operational Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-            "Privacy Impact": "(Severe/Major/Moderate/Minor/Negligible)"
-        }},
-        "key": 1,
-        "_id": "scenario_id"
-        }}
-    ]
-    }}
-    """
+        cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
+        scenarios = json.loads(cleaned)
+        scenarios["model_id"] = model_id
 
-    response = model.generate_content(prompt)
-    raw_output = response.text.strip()
-    cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
-    scenarios = json.loads(cleaned)
+        # Ensure _id and key are assigned
+        for i, detail in enumerate(scenarios.get("Details", []), start=1):
+            detail["_id"] = detail.get("_id", str(uuid.uuid4()))
+            detail["key"] = detail.get("key", i)
+            for loss in detail.get("cyberLosses", []):
+                loss["id"] = loss.get("id", str(uuid.uuid4()))
+                loss["isSelected"] = loss.get("isSelected", True)
 
-    scenarios["model_id"] = model_id
+        # Insert into DB
+        damage_result = db.Damage_scenarios.insert_one(scenarios)
 
-    for i, detail in enumerate(scenarios.get("Details", []), start=1):
-        detail["_id"] = detail.get("_id", str(uuid.uuid4()))
-        detail["key"] = detail.get("key", i)
+        # Convert ObjectIds to strings for safe JSON serialization
+        def convert_objectid(obj):
+            if isinstance(obj, ObjectId):
+                return str(obj)
+            if isinstance(obj, list):
+                return [convert_objectid(i) for i in obj]
+            if isinstance(obj, dict):
+                return {k: convert_objectid(v) for k, v in obj.items()}
+            return obj
 
-        for loss in detail.get("cyberLosses", []):
-            loss["id"] = loss.get("id", str(uuid.uuid4()))
-            loss["isSelected"] = loss.get("isSelected", True)
+        safe_scenarios = convert_objectid(scenarios)
 
-    # ✅ Only store damage scenarios
-    damage_result = db.Damage_scenarios.insert_one(scenarios)
+        result = {
+            "message": "Damage scenarios created successfully",
+            "scenario_id": str(damage_result.inserted_id),
+            "model_id": model_id,
+            "scenarios": safe_scenarios,
+        }
 
-    result = {
-        "message": "Damage scenarios created successfully",
-        "scenario_id": str(damage_result.inserted_id),
-        "model_id": model_id,
-        "scenarios": scenarios
-    }
+        if standalone:
+            return result
+        return jsonify(result), 201
 
-    if standalone:
-        return result
-    return jsonify(result), 201
+    except json.JSONDecodeError as e:
+        print("ERROR: JSON Decode Error:", str(e))
+        traceback.print_exc()
+        if standalone:
+            raise ValueError("Invalid response format from AI")
+        return jsonify({"error": "Invalid response format from AI", "details": str(e)}), 500
 
-    # except json.JSONDecodeError:
-    #     error = "Invalid response format from AI"
-    #     if standalone:
-    #         raise ValueError(error)
-    #     return jsonify({"error in damage scenario": error}), 500
-    # except Exception as e:
-    #     if standalone:
-    #         raise
-    #     return jsonify({"error in damage scenario 500": str(e)}), 500
+    except Exception as e:
+        print("ERROR: Unexpected Exception:", str(e))
+        traceback.print_exc()
+        if standalone:
+            raise
+        return jsonify({"error": "Unexpected error", "details": str(e)}), 500
+
 
 #4 - Threat scenario creation
 # Manual threat creation
 @modelprompt.route('/v1/generate/threat-scenarios', methods=['POST'])
-def create_threat_scenarios(model_id):
-    # print("model_id",model_id)
-    # model_id = request.form.get('modelId')
-    """Create threat scenarios from existing damage scenarios"""
+def create_threat_scenarios(model_id=None):
     try:
         if not model_id:
             return jsonify({"error": "model_id is required"}), 400
 
-        # 🔍 Fetch related damage scenarios
         damage_doc = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
-        # print("damage_doc",damage_doc)
         if not damage_doc or "Details" not in damage_doc:
             return jsonify({"error": "No damage scenarios found for this model_id"}), 404
 
@@ -453,38 +474,40 @@ def create_threat_scenarios(model_id):
 
             threat_details.append(threat_detail)
 
-        # 📦 Wrap in final structure
         threat_scenario_doc = {
             "model_id": model_id,
             "type": "derived",
             "Details": threat_details
         }
 
-      # 💾 Insert into DB
-        result = db.Threat_scenarios.insert_one(threat_scenario_doc)
+        # 🔄 Replace existing derived threat scenarios for this model_id
+        db.Threat_scenarios.replace_one(
+            {"model_id": model_id, "type": "derived"},
+            threat_scenario_doc,
+            upsert=True
+        )
 
-        # Convert ObjectId to string for JSON response
-        threat_scenario_doc["_id"] = str(result.inserted_id)
+        saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "derived"})
+        saved_doc["_id"] = str(saved_doc["_id"])
 
         return jsonify({
             "message": "Threat scenarios created successfully",
             "model_id": model_id,
-            "scenarios": threat_scenario_doc
+            "scenarios": saved_doc
         }), 201
+
     except Exception as e:
         return jsonify({"error in threat scenario": str(e)}), 500
 
 
 #threat creation
-def extract_json_from_text(text):
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return text.strip()
-    except Exception:
-        return text.strip()
+def extract_json_from_text(text: str) -> str:
+    """
+    Extracts JSON part from Gemini response text.
+    Assumes JSON is enclosed in braces {} or brackets [].
+    """
+    match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+    return match.group(1) if match else text
 
 
 def group_threats_by_node(threat_ids):
@@ -494,9 +517,8 @@ def group_threats_by_node(threat_ids):
         grouped[key].append(threat)
     return grouped
 
-# Derived threat scenario creation
-import json, re
 
+# Derived threat scenario creation
 def generate_single_derived_scenario(threat_group, user_prompt=None):
     """
     Generate a derived threat scenario name + description from a group of threats.
@@ -515,6 +537,7 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
     prompt_intro = user_prompt if user_prompt else default_intro
 
     # Mandatory Data structure part
+  # Mandatory Data structure part
     prompt = f"""
         {prompt_intro}
 
@@ -525,9 +548,12 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
         - `rowId`: the related damage scenario
 
         Return only a JSON object with:
-        - name: (string)
-        - description: (string)
-        """
+        - name: (string) → A short, meaningful, human-readable title for the derived threat scenario
+        - description: (string) → A concise natural-language summary of the combined threats. 
+        Do NOT return an array, object, or repeat the input JSON. 
+        The description should read like a human-written explanation, 
+        not raw data.
+    """
 
     # Call Gemini
     gemini_response = model.generate_content(prompt)
@@ -544,43 +570,70 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
         # Remove control chars
         cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
 
-        # Repair common JSON issues (unescaped quotes, trailing commas)
+        # Repair common JSON issues
         cleaned = cleaned.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`")  # remove code fences
         cleaned = re.sub(r",\s*}", "}", cleaned)  # remove trailing commas before }
         cleaned = re.sub(r",\s*]", "]", cleaned)  # remove trailing commas before ]
 
-        # print("Gemini Output (raw):", content_text)
-        # print("Gemini Output (cleaned):", cleaned)
+        parsed = json.loads(cleaned)
 
-        return json.loads(cleaned)
+        # 🛠 Ensure description is always a string
+        description = parsed.get("description", "")
+        if not isinstance(description, str):
+            # Convert list/dict → readable string
+            if isinstance(description, list):
+                description = " ".join(str(item) for item in description)
+            else:
+                description = json.dumps(description, ensure_ascii=False)
+
+        return {
+            "name": parsed.get("name", "Unnamed Derived Threat"),
+            "description": description
+        }
 
     except Exception as e:
         print("⚠️ Failed JSON parse, falling back. Raw text:\n", content_text)
         raise ValueError(f"Failed to parse Gemini response: {str(e)}")
 
+
 def generate_derived_threat_scenarios(model_id, threat_ids, name="", description="", user_prompt=None):
     details = []
 
-    # Manual override (single scenario)
     if name or description:
+        # 🛠 Guarantee string description
+        if not isinstance(description, str):
+            if isinstance(description, list):
+                description = " ".join(str(item) for item in description)
+            else:
+                description = json.dumps(description, ensure_ascii=False)
+
         derived = {
             "name": name or "Unnamed Derived Threat",
-            "description": description or "",
+            "description": description,
             "id": str(uuid.uuid4()),
-            "threat_ids": threat_ids  # ✅ Attach provided threat_ids directly
+            "threat_ids": threat_ids
         }
         details.append(derived)
     else:
         grouped = group_threats_by_node(threat_ids)
         for group in grouped.values():
             result = generate_single_derived_scenario(group, user_prompt)
+
+            # 🛠 Guarantee string description
+            description = result.get("description", "")
+            if not isinstance(description, str):
+                if isinstance(description, list):
+                    description = " ".join(str(item) for item in description)
+                else:
+                    description = json.dumps(description, ensure_ascii=False)
+
             derived = {
                 "name": result.get("name", "Unnamed Derived Threat"),
-                "description": result.get("description", ""),
+                "description": description,
                 "id": str(uuid.uuid4()),
-                "threat_ids": group  # ✅ Attach the group used to generate this scenario
+                "threat_ids": group
             }
             details.append(derived)
 
@@ -590,12 +643,20 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
             "type": "User-defined",
             "Details": details
         }
-        insert_result = db.Threat_scenarios.insert_one(document)
+        # 🔄 Replace existing document for this model_id OR insert if not exists
+        db.Threat_scenarios.replace_one(
+            {"model_id": model_id, "type": "User-defined"},
+            document,
+            upsert=True
+        )
 
-        document["_id"] = str(insert_result.inserted_id)
-        return document
+        # Fetch the replaced document with _id
+        saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
+        saved_doc["_id"] = str(saved_doc["_id"])
+        return saved_doc
 
     return {}
+
 
 @modelprompt.route('/v1/generate/derived-threat-scenarios', methods=['POST'])
 def create_derived_threat_scenario():
@@ -617,6 +678,93 @@ def create_derived_threat_scenario():
     except Exception as e:
         return jsonify({"error in derived threat scenario": str(e)}), 500
 
+# Full threat scenario pipeline
+@modelprompt.route('/v1/generate/full-threat-scenario', methods=['POST'])
+def create_threat_and_derived_combined():
+    try:
+        start_time = time.time()
+
+        model_id = request.form.get('modelId', "")
+        name = request.form.get('name', "")
+        description = request.form.get('description', "")
+        user_prompt = request.form.get('threatScenarioPrompt', "")
+
+        if not model_id:
+            return jsonify({"error": "modelId is required"}), 400
+
+        print(f"\n=== [COMBINED API] STARTED for model {model_id} ===")
+
+        # 1️⃣ STEP 1: Threat Scenario Generation
+        t1 = time.time()
+        threat_response, status_code = create_threat_scenarios(model_id)
+        print(f"[TIMING] Threat scenario generation took {time.time() - t1:.2f}s")
+
+        if status_code != 201:
+            print("[ERROR] Threat scenario generation failed")
+            return threat_response, status_code
+
+        threat_data = threat_response.get_json()
+        print(f"[DEBUG] Threat scenarios created: {len(threat_data.get('scenarios', {}).get('Details', []))}")
+
+        # Extract threat IDs
+        threat_ids = []
+        for threat in threat_data.get("scenarios", {}).get("Details", []):
+            for item in threat.get("Details", []):
+                for prop in item.get("props", []):
+                    threat_ids.append({
+                        "nodeId": item["nodeId"],
+                        "propId": prop["id"],
+                        "rowId": threat["rowId"]
+                    })
+        print(f"[DEBUG] Collected {len(threat_ids)} threatIds for derived generation")
+
+        # 2️⃣ STEP 2: Derived Threat Scenario Generation (AI Call)
+        derived_response_json = None
+        derived_status = 500
+
+        t2 = time.time()
+        with current_app.test_request_context(
+            "/v1/generate/derived-threat-scenario",
+            method="POST",
+            data=MultiDict({
+                "modelId": model_id,
+                "name": name,
+                "description": description,
+                "threatScenarioPrompt": user_prompt,
+                "threatIds": json.dumps(threat_ids)
+            })
+        ):
+            try:
+                print("[INFO] Calling create_derived_threat_scenario()...")
+                derived_response, derived_status = create_derived_threat_scenario()
+                if hasattr(derived_response, "get_json"):
+                    derived_response_json = derived_response.get_json()
+                print(f"[TIMING] Derived threat scenario generation took {time.time() - t2:.2f}s")
+            except Exception as e:
+                print("[ERROR] Derived threat scenario generation failed:", str(e))
+                traceback.print_exc()
+
+        total_time = time.time() - start_time
+        print(f"=== [COMBINED API] FINISHED in {total_time:.2f}s ===\n")
+
+        return jsonify({
+            "message": "Threat + Derived Threat scenarios created successfully",
+            "threat_scenarios": threat_data,
+            "derived_threat_scenarios": derived_response_json,
+            "derived_status": derived_status,
+            "timing": {
+                "threat_generation_sec": round(time.time() - t1, 2),
+                "derived_generation_sec": round(time.time() - t2, 2),
+                "total_sec": round(total_time, 2)
+            }
+        }), 201
+
+    except Exception as e:
+        print("[FATAL ERROR in combined API]:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "Error in combined API", "details": str(e)}), 500  
+    
+    
 #5 - Attack Scenarion Creation
 # generate Attack Tree
 def preprocess_threat_scenarios(threat_scenarios):
@@ -640,10 +788,6 @@ def preprocess_threat_scenarios(threat_scenarios):
                         "threat_key": f"TS{prop.get('key', 0):03}"
                     })
     return processed
-
-import json
-import re
-import uuid
 
 def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=None):
     """
@@ -1115,7 +1259,54 @@ def convert_possible_events_from_attack_trees():
 
     except Exception as e:
         return jsonify({"error in converting possible events" : str(e)}), 500
-     
+    
+# Full attack scenario pipeline
+@modelprompt.route('/v1/generate/full-attack-scenario', methods=['POST'])
+def generate_full_attack_pipeline():
+    try:
+        model_id = request.form.get('modelId', '')
+        user_prompt = request.form.get('attackscenarioPrompt', '')
+
+        if not model_id:
+            return jsonify({"error": "Missing modelId"}), 400
+
+        # 1️⃣ Call generate_attack_tree
+        attack_tree_response, tree_status = generate_attack_tree()
+        if tree_status != 200:
+            return attack_tree_response, tree_status  # stop if failed
+
+        attack_tree_data = attack_tree_response.get_json()
+
+        # 2️⃣ Call generate_attacks
+        with current_app.test_request_context(
+            data={"modelId": model_id, "attackscenarioPrompt": user_prompt}
+        ):
+            attacks_response, attacks_status = generate_attacks()
+        if attacks_status != 200:
+            return attacks_response, attacks_status
+
+        attacks_data = attacks_response.get_json()
+
+        # 3️⃣ Call convert_possible_events_from_attack_trees
+        with current_app.test_request_context(
+            data={"modelId": model_id, "attackscenarioPrompt": user_prompt}
+        ):
+            convert_response, convert_status = convert_possible_events_from_attack_trees()
+        if convert_status != 200:
+            return convert_response, convert_status
+
+        converted_data = convert_response.get_json()
+
+        return jsonify({
+            "message": "Full attack pipeline executed successfully",
+            "attack_tree_data": attack_tree_data,
+            "attacks_data": attacks_data,
+            "converted_events": converted_data
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error in full attack pipeline": str(e)}), 500
+
 #6 - Cybersecurity Generation
 def extract_json_block(text):
     """
@@ -1177,6 +1368,7 @@ def generate_cybersecurity_artifact_with_gemini(artifact_type, system_name):
     except Exception as e:
         print("Gemini Output (cleaned):", cleaned)
         # Return the raw output in the error for easier debugging
+
 
 @modelprompt.route('/v1/generate/cybersecurity-artifacts', methods=['POST'])
 def generate_cybersecurity_artifacts():
