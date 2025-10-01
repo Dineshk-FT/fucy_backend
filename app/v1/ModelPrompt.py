@@ -1464,6 +1464,80 @@ def generate_cybersecurity_artifacts():
 
     except Exception as e:
         return jsonify({"error in generate_cybersecurity": str(e)}), 500
+    
+# Risk Tremenet creation
+@modelprompt.route("/v1/generate/generate-risk-treatments", methods=["POST"])
+def auto_generate_risk_treatments():
+    """
+    Automatically generates all risk treatments for a given modelId
+    using the stored Threat_scenarios collection.
+
+    Expected form-data:
+      modelId: <model_id>
+    """
+    try:
+        model_id = request.form.get("modelId")
+        if not model_id:
+            return jsonify({"error": "modelId is required"}), 400
+
+        # 🔍 Fetch threat scenarios for this model
+        threat_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "derived"})
+        if not threat_doc:
+            return jsonify({"error": f"No threat scenarios found for model {model_id}"}), 404
+
+        details_list = threat_doc.get("Details", [])
+        if not details_list:
+            return jsonify({"error": "No threat scenario details found"}), 404
+
+        generated_count = 0
+        skipped_count = 0
+
+        for threat in details_list:
+            damage_id = threat.get("rowId")
+            damage_name = threat.get("damage_name")
+            damage_key = threat.get("id")  # e.g., DS001
+
+            for item in threat.get("Details", []):
+                node_id = item.get("nodeId")
+                node_name = item.get("node")
+
+                for prop in item.get("props", []):
+                    if not prop.get("isSelected", False):
+                        continue
+
+                    stride_category = threat_type(prop.get("name", ""))
+                    threat_key = f"TS{prop['key']:03}"
+
+                    label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
+
+                    # 🚀 Use existing API logic via test request context
+                    with current_app.test_request_context(
+                        method="POST",
+                        data={
+                            "nodeId": node_id,
+                            "threatId": prop["id"],
+                            "modelId": model_id,
+                            "label": label,
+                            "damageId": damage_id,
+                            "key": threat_key,
+                        },
+                    ):
+                        response = add_risk_treatment()
+                        if hasattr(response, "status_code") and response.status_code == 200:
+                            generated_count += 1
+                        else:
+                            skipped_count += 1
+
+        return jsonify({
+            "message": "Risk treatments generated successfully",
+            "modelId": model_id,
+            "generated_count": generated_count,
+            "skipped_count": skipped_count
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # 7 - Generate Full Model
 @modelprompt.route('/v1/generate/full-model', methods=['POST'])
