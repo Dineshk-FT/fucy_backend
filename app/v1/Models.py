@@ -325,3 +325,109 @@ def clear_model_data():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+tara_data = {}
+
+@app.route("/v1/taraModel/store", methods=["POST"])
+def store_tara_data():
+    try:
+        # Extract form data
+        model_id = request.form.get('modelId')
+        vehicle_tara_edges = request.form.get('vehicleTaraEdges')
+        vehicle_tara_nodes = request.form.get('vehicleTaraNodes')
+        vehicle_tara_viewport = request.form.get('vehicleTaraViewport')
+
+        # Validate inputs
+        if not all([model_id, vehicle_tara_edges, vehicle_tara_nodes, vehicle_tara_viewport]):
+            return jsonify({"error": "All fields (modelId, vehicleTaraEdges, vehicleTaraNodes, vehicleTaraViewport) are required"}), 400
+
+        # Check if modelId already exists
+        existing_model = db.tara_data.find_one({"model_id": model_id})
+        if existing_model:
+            return jsonify({"error": "Data for this modelId already exists. Use the update endpoint."}), 400
+
+        # Prepare the data to store
+        tara_data = {
+            "model_id": model_id,
+            "vehicle_tara_edges": vehicle_tara_edges,
+            "vehicle_tara_nodes": vehicle_tara_nodes,
+            "vehicle_tara_viewport": vehicle_tara_viewport
+        }
+
+        # Insert into MongoDB
+        db.tara_data.insert_one(tara_data)
+
+        return jsonify({"message": "Data stored successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/v1/taraModel/fetch", methods=["POST"])
+def fetch_tara_data():
+    try:
+        # Get the modelId from the form data
+        model_id = request.form.get('modelId')
+
+        # Check if modelId is provided
+        if not model_id:
+            return jsonify({"error": "modelId is required"}), 400
+
+        # Fetch the data for the given modelId from MongoDB
+        data = db.tara_data.find_one({"model_id": model_id})
+
+        # If data is not found, return error
+        if not data:
+            return jsonify({"error": "Model not found"}), 404
+
+        # Convert string fields into JSON objects using json.loads()
+        vehicle_tara_edges = json.loads(data["vehicle_tara_edges"]) if data["vehicle_tara_edges"] else []
+        vehicle_tara_nodes = json.loads(data["vehicle_tara_nodes"]) if data["vehicle_tara_nodes"] else []
+        vehicle_tara_viewport = json.loads(data["vehicle_tara_viewport"]) if data["vehicle_tara_viewport"] else {}
+
+        # Return the data, ensuring fields are in proper JSON format
+        return jsonify({
+            "modelId": data["model_id"],
+            "vehicleTaraEdges": vehicle_tara_edges,
+            "vehicleTaraNodes": vehicle_tara_nodes,
+            "vehicleTaraViewport": vehicle_tara_viewport
+        }), 200
+
+    except Exception as e:
+        # In case of any errors, return an error message
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/v1/taraModel/update", methods=["POST"])
+def update_tara_data():
+    try:
+        # Extract form data
+        model_id = request.form.get('modelId')
+        vehicle_tara_edges = request.form.get('vehicleTaraEdges')
+        vehicle_tara_nodes = request.form.get('vehicleTaraNodes')
+        vehicle_tara_viewport = request.form.get('vehicleTaraViewport')
+
+        # Validate inputs
+        if not all([model_id, vehicle_tara_edges, vehicle_tara_nodes, vehicle_tara_viewport]):
+            return jsonify({"error": "All fields (modelId, vehicleTaraEdges, vehicleTaraNodes, vehicleTaraViewport) are required"}), 400
+
+        # Check if the modelId exists
+        existing_model = db.tara_data.find_one({"model_id": model_id})
+
+        if not existing_model:
+            return jsonify({"error": "Model not found. Please use the store endpoint to add new data."}), 404
+
+        # Update the data in MongoDB
+        db.tara_data.update_one(
+            {"model_id": model_id},
+            {"$set": {
+                "vehicle_tara_edges": vehicle_tara_edges,
+                "vehicle_tara_nodes": vehicle_tara_nodes,
+                "vehicle_tara_viewport": vehicle_tara_viewport
+            }}
+        )
+
+        return jsonify({"message": "Data updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
