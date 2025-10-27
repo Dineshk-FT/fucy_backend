@@ -117,10 +117,19 @@ def update_name_desc():
         scene_id = request.form.get("sceneId")
         name = request.form.get("Name")
         description = request.form.get("Description")
+        is_enabled_str = request.form.get("enabled")  # May be "true", "false", or None
 
         # Basic validation before JSON parsing
         if not scenario_id or not scene_id:
             return jsonify({"error": "Scenario ID and Detail ID are required"}), 400
+
+        # Convert is_enabled to boolean if present
+        is_enabled = None
+        if is_enabled_str is not None:
+            if isinstance(is_enabled_str, str):
+                is_enabled = is_enabled_str.lower() in ("true", "1", "yes")
+            else:
+                is_enabled = bool(is_enabled_str)
 
         # Ensure MongoDB index on 'scenes._id'
         db.Cybersecurity.create_index("scenes._id", background=True)
@@ -137,16 +146,21 @@ def update_name_desc():
                 },
             }
             duplicate_check = db.Cybersecurity.find_one(query)
-
             if duplicate_check:
                 return jsonify({"error": "Name already present in scenes"}), 409
 
         # Prepare update data
         update_data = {}
-        if name:
+        if name is not None:
             update_data["scenes.$[elem].Name"] = name
-        if description:
+        if description is not None:
             update_data["scenes.$[elem].Description"] = description
+        if is_enabled is not None:  # Only set if explicitly provided
+            update_data["scenes.$[elem].isEnabled"] = is_enabled
+
+        # If nothing to update
+        if not update_data:
+            return jsonify({"error": "No valid fields to update"}), 400
 
         # Update Cybersecurity collection
         result = db.Cybersecurity.update_one(
@@ -156,14 +170,12 @@ def update_name_desc():
         )
 
         if result.matched_count == 0:
-            return jsonify({"error": "No matching Damage_scenario found"}), 404
+            return jsonify({"error": "No matching scene found"}), 404
 
         return jsonify({"message": "Updated successfully"}), 200
 
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
-
-
 @app.route("/v1/delete/cybersecurity", methods=["DELETE"])
 def delete_cybersecurity():
     try:

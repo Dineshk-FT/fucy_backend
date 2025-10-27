@@ -10,6 +10,12 @@ import string
 from app.__init__ import send_email
 import os
 import stripe
+from flask_mail import Mail, Message
+import secrets
+import string
+
+# Initialize Flask-Mail in your app
+mail = Mail()
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -381,6 +387,7 @@ def login():
         return jsonify({
             "message": "Login Successful",
             "model_id": str(model_id),
+            "org":user.get("org"),
             "user-id": token,
             "username": user["username"],
             "license_type": user.get("license_type"),
@@ -416,23 +423,111 @@ def request_reset_password():
         current_app.logger.error(f"Error in request_reset_password: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@auth.route("/reset-password", methods=["POST"])
-def reset_password():
+@auth.route("/forgot-password", methods=["POST"])
+def forgot_password():
     try:
-        new_password = request.form.get("new_password")
-        reset_token = request.form.get("reset_token")
-        if not reset_token or not new_password:
-            return jsonify({"error": "Reset token and new password are required"}), 400
-        reset_entry = db.accounts.find_one({"reset_token": reset_token})
-        if reset_entry:
-            hashed_password = generate_password_hash(new_password, method="pbkdf2:sha256")
-            db.accounts.update_one(
-                {"username": reset_entry["username"]},
-                {"$set": {"password": hashed_password}, "$unset": {"reset_token": ""}}
+        email = request.form.get("email")
+        org = request.form.get("org")
+        
+        if not email or not org:
+            return jsonify({"error": "Email and organization are required"}), 400
+        
+        # Generate random password        
+        alphabet = string.ascii_letters + string.digits
+        random_password = ''.join(secrets.choice(alphabet) for _ in range(12))
+        
+        # Hash and update password
+        hashed_password = generate_password_hash(random_password, method="pbkdf2:sha256")
+        
+        result = db.accounts.update_one(
+            {"email": email, "org": org},
+            {"$set": {"password": hashed_password}}
+        )
+        
+        if result.modified_count == 0:
+            return jsonify({"error": "User not found with provided email and organization"}), 400
+        
+        # Send email using Flask-Mail
+        try:
+            msg = Message(
+                subject="Your Password Has Been Reset",
+                sender="noreply@yourapp.com",
+                recipients=[email]
             )
-            return jsonify({"message": "Password has been reset successfully!"}), 200
-        else:
-            return jsonify({"error": "Invalid or expired reset token"}), 400
+            msg.body = f"""
+            Hello,
+            
+            Your password has been reset as requested.
+            
+            Organization: {org}
+            New Password: {random_password}
+            
+            Please log in and change your password immediately.
+            
+            Best regards,
+            Your App Team
+            """
+            
+            mail.send(msg)
+            
+        except Exception as email_error:
+            current_app.logger.error(f"Error sending email: {str(email_error)}")
+            return jsonify({"error": "Password was reset but failed to send email"}), 500
+        
+        return jsonify({"message": "New password has been sent to your email"}), 200
+        
     except Exception as e:
         current_app.logger.error(f"Error in reset_password: {str(e)}")
         return jsonify({"error": str(e)}), 500
+    
+
+@auth.route("/reset-password", methods=["POST"])
+def reset_password():
+    try:
+        # Get form data
+        identifier = request.form.get("identifier")  # Can be email or username
+        org = request.form.get("org")
+        old_password = request.form.get("old_password")
+        new_password = request.form.get("new_password")
+        
+        # Validate required fields
+        if not all([identifier, org, old_password, new_password]):
+            return jsonify({"error": "All fields are required"}), 400
+        
+        # Validate new password strength
+        if len(new_password) < 8:
+            return jsonify({"error": "New password must be at least 8 characters long"}), 400
+        
+        # Find user by email or username
+        user = db.accounts.find_one({
+            "$or": [
+                {"email": identifier},
+                {"username": identifier}
+            ],
+            "org": org
+        })
+        
+        if not user:
+            return jsonify({"error": "User not found with provided credentials"}), 400
+        
+        # Verify old password
+        if not check_password_hash(user["password"], old_password):
+            return jsonify({"error": "Current password is incorrect"}), 400
+        
+        # Hash new password
+        hashed_password = generate_password_hash(new_password, method="pbkdf2:sha256")
+        
+        # Update password in database
+        result = db.accounts.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"password": hashed_password}}
+        )
+        
+        if result.modified_count == 0:
+            return jsonify({"error": "Failed to update password"}), 500
+        
+        return jsonify({"message": "Password has been reset successfully"}), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"Error in reset_password: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
