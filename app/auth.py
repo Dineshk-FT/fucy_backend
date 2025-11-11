@@ -449,22 +449,36 @@ def forgot_password():
         # Send email using Flask-Mail
         try:
             msg = Message(
-                subject="Your Password Has Been Reset",
+                subject="🔒 Your Password Has Been Reset",
                 sender="noreply@yourapp.com",
                 recipients=[email]
             )
-            msg.body = f"""
-            Hello,
             
-            Your password has been reset as requested.
-            
-            Organization: {org}
-            New Password: {random_password}
-            
-            Please log in and change your password immediately.
-            
-            Best regards,
-            Your App Team
+            # HTML-styled message
+            msg.html = f"""
+            <div style="font-family: Arial, sans-serif; color: #333; padding: 20px;">
+                <div style="max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); background-color: #fafafa;">
+                    <div style="background-color: #4CAF50; color: white; padding: 15px 20px; border-radius: 10px 10px 0 0;">
+                        <h2 style="margin: 0;">YourApp Password Reset</h2>
+                    </div>
+                    <div style="padding: 20px;">
+                        <p>Hello,</p>
+                        <p>Your password has been <strong>successfully reset</strong> for your organization:</p>
+                        
+                        <p style="margin: 10px 0; font-size: 16px;">
+                            <b>Organization:</b> {org}<br>
+                            <b>New Password:</b> 
+                            <span style="display: inline-block; background-color: #eee; padding: 6px 12px; border-radius: 6px; font-family: monospace; color: #2c3e50;">
+                                {random_password}
+                            </span>
+                        </p>
+
+                        <p>Please <a href="https://yourapp.com/login" style="color: #4CAF50; text-decoration: none;">log in</a> and change your password immediately for security.</p>
+
+                        <p style="margin-top: 30px;">Best regards,<br><b>YourApp Team</b></p>
+                    </div>
+                </div>
+            </div>
             """
             
             mail.send(msg)
@@ -476,9 +490,9 @@ def forgot_password():
         return jsonify({"message": "New password has been sent to your email"}), 200
         
     except Exception as e:
-        current_app.logger.error(f"Error in reset_password: {str(e)}")
+        current_app.logger.error(f"Error in forgot_password: {str(e)}")
         return jsonify({"error": str(e)}), 500
-    
+  
 
 @auth.route("/reset-password", methods=["POST"])
 def reset_password():
