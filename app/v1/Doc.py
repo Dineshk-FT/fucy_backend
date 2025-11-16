@@ -72,7 +72,7 @@ def create_cover_page(project_name="Battery Management System"):
     
     # Document Information Table - Updated to match TARA report
     doc_info_data = [
-        [Paragraph("<b>Client Corporation</b>", styles['Heading3']), "Stellantis Corporation"],
+        [Paragraph("<b>Client Corporation</b>", styles['Heading3']), "Company XYZ Corporation"],
         [Paragraph("<b>Project Name</b>", styles['Heading3']), project_name],
         [Paragraph("<b>Document Title</b>", styles['Heading3']), "Threat Analysis and Risk Assessment Report"],
         [Paragraph("<b>Version</b>", styles['Heading3']), "1.0 (Initial Release)"],
@@ -116,9 +116,9 @@ def create_cover_page(project_name="Battery Management System"):
     elements.append(Spacer(1, 10))
     
     copyright_text = """<b>Copyright © 2025 FucyTech.</b> All rights reserved.<br/><br/>
-    This document contains proprietary and confidential information belonging to <b>Stellantis Corporation</b>. 
+    This document contains proprietary and confidential information belonging to <b>Company XYZ Corporation</b>. 
     The analysis within was performed by FucyTech. No part of this publication may be reproduced, distributed, 
-    or transmitted in any form or by any means without the prior written permission of Stellantis Corporation. 
+    or transmitted in any form or by any means without the prior written permission of Company XYZ Corporation. 
     Unauthorized disclosure, use, or duplication of this document is strictly prohibited."""
     
     copyright_para = Paragraph(copyright_text, copyright_style)
@@ -302,7 +302,7 @@ def create_introduction_chapter(project_name="Battery Management System"):
         leftIndent=10
     )
     
-    security_text = """<b>Stellantis Corporation Internal Document</b> Page 2<br/><br/>
+    security_text = """<b>Company XYZ Corporation Internal Document</b> Page 2<br/><br/>
 The BMS is a major cybersecurity target due to its direct control over vehicle power and safety. Tampering with the BMS could lead to severe consequences, including premature battery failure, fire, or immediate vehicle shutdown, warranting its inclusion in a comprehensive risk assessment."""
     elements.append(Paragraph(security_text, security_note_style))
     
@@ -317,7 +317,7 @@ The BMS is a major cybersecurity target due to its direct control over vehicle p
     )
     
     elements.append(Spacer(1, 20))
-    elements.append(Paragraph("FucyTech Confidential | Prepared:fqpy5tglia@i3@26p6orgfioch | All Rights Reserved:e4jnTABA/VERSION 1.0", footer_style))
+    # elements.append(Paragraph("FucyTech Confidential | Prepared:fqpy5tglia@i3@26p6orgfioch | All Rights Reserved:e4jnTABA/VERSION 1.0", footer_style))
     
     elements.append(PageBreak())
     
@@ -584,7 +584,7 @@ def create_safe_table(table_data, title, available_width=500):
     
     return elements
 
-def handle_svg_file(svg_file, max_width=510, max_height=650):
+def handle_svg_file(svg_file, max_width=554, max_height=650):
     """Handle SVG file conversion for PDF with full page width support"""
     try:
         if svg_file:
@@ -602,18 +602,25 @@ def handle_svg_file(svg_file, max_width=510, max_height=650):
                 original_width = drawing.width
                 original_height = drawing.height
                 
-                # Calculate scale factor to use full page width
+                print(f"Original SVG size: {original_width} x {original_height}")
+                print(f"Target max size: {max_width} x {max_height}")
+                
+                # Calculate scale factors
                 width_scale = max_width / original_width
                 height_scale = max_height / original_height
                 
-                # Use the smaller scale factor to fit within both dimensions
-                # But prioritize width to use full page width
+                # Use the scale factor that makes the image as large as possible
+                # while fitting within both dimensions
                 scale_factor = min(width_scale, height_scale)
                 
-                # Apply scaling
+                print(f"Calculated scale factor: {scale_factor}")
+                
+                # Apply scaling directly to the drawing
                 drawing.width = original_width * scale_factor
                 drawing.height = original_height * scale_factor
                 drawing.scale(scale_factor, scale_factor)
+                
+                print(f"Final drawing size: {drawing.width} x {drawing.height}")
             
             # Clean up temporary file
             os.unlink(temp_svg_path)
@@ -623,11 +630,11 @@ def handle_svg_file(svg_file, max_width=510, max_height=650):
         print(f"Error processing SVG file: {e}")
     return None
 
-
 @app.route("/v1/generate/doc", methods=["POST"])
 def generate_doc():
     try:
         model_id = request.form.get("model-id")
+        
 
         if not ObjectId.is_valid(model_id):
             return jsonify({"error": "Invalid model_id format"}), 400
@@ -641,6 +648,7 @@ def generate_doc():
         project_name = mode_record.get('name', 'Battery Management System')
         
         # Initialize all data variables
+        asset_identification = []
         damage_scenario_data = []
         threat_scenario_data = []
         attack_tree_data = []
@@ -651,6 +659,7 @@ def generate_doc():
         cybersecurity_claims_data = []
 
         # Get table flags from request
+        asset_identification_table = int(request.form.get('assetIdentificationTable', 0))
         damage_scenarios_table = int(request.form.get('damageScenariosTable', 0))
         threat_scenarios_table = int(request.form.get('threatScenariosTable', 0))
         attack_trees_table = int(request.form.get('attackTreatScenariosTable', 0))
@@ -660,83 +669,135 @@ def generate_doc():
         cyber_security_controls = int(request.form.get('cyberSecurityControls', 0))
         cyber_security_claims = int(request.form.get('cyberSecurityClaims', 0))
 
-        # ======================= Damage Scenario Table =======================
+        # assets_record = db.Assets.find_one({"model_id": model_id})
+        # asset_identification_data = []
+
+        # ================== Add Asset Identification Section ==================
+        if asset_identification_table == 1:
+            assets_record = db.Assets.find_one({"model_id": model_id})
+            asset_identification_data = []
+
+            if assets_record and assets_record.get("Details"):
+                headers = ["ID", "Asset Name", "Description", "Security Properties"]
+                asset_identification_data.append([safe_wrap_content(col, 'white') for col in headers])
+
+                for index, asset in enumerate(assets_record["Details"]):
+                    asset_id = f"A{index + 1:03}"
+                    name = asset.get("name", "")
+                    description = asset.get("desc", "")
+                    props_raw = asset.get("props", [])
+                    # Extract only the "name" field from each object
+                    if isinstance(props_raw, list):
+                        properties = ", ".join(
+                            p.get("name", "") for p in props_raw if isinstance(p, dict)
+                        )
+                    else:
+                        properties = str(props_raw)
+                    # properties = ", ".join(asset.get("props", [])) if isinstance(asset.get("props", []), list) else str(asset.get("props", ""))
+                    asset_identification_data.append([
+                        safe_wrap_content(asset_id, 'black'),
+                        safe_wrap_content(name, 'black'),
+                        safe_wrap_content(description, 'black'),
+                        safe_wrap_content(properties, 'black')
+                    ])
+            else:
+                asset_identification_data = [["No Asset Identification Data Found"]]
+
+            # ✅ Wider, professional header
+            col_widths = [70, 130, 220, 110]  # Adds up to ≈530
+            asset_table_title = Table([["Asset Identification"]], colWidths=[530], hAlign='LEFT')
+            asset_table_title.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E8E8E8')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            asset_identification.append(asset_table_title)
+            asset_identification.append(Spacer(1, 6))
+
+            asset_table = Table(asset_identification_data, colWidths=col_widths, hAlign='LEFT', repeatRows=1)
+            asset_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 7),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 3),
+                ('TOPPADDING', (0, 0), (-1, 0), 3),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 6),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 1), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9F9F9')])
+            ]))
+            asset_identification.append(asset_table)
+            asset_identification.append(PageBreak())
+
+        # ================== Add Damage Scenarios Section ==================
         if damage_scenarios_table == 1:
             damage_record = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
+            damage_scenario_title_table = Table([["Damage Scenario Table"]],
+                                                colWidths=[530], hAlign='LEFT')
+            damage_scenario_title_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E8E8E8')),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ]))
+            damage_scenario_data.append(damage_scenario_title_table)
+            damage_scenario_data.append(Spacer(1, 6))
+            damage_scenario_data.append(Paragraph("Damage Scenario and Impact Analysis", ParagraphStyle(
+                'Heading1', fontSize=14, textColor=colors.black, fontName='Helvetica-Bold', spaceAfter=18)))
 
-            valid_columns = [
-                "ID", "Name", "Description/Scalability", 
-                "Losses of Cybersecurity Properties", "Assets", 
-                "Safety Impact", "Financial Impact", "Operational Impact", 
-                "Privacy Impact", "Impact Justification", "Associated Threat Scenarios", 
-                "Overall Impact", "Asset is Evaluated", "Cybersecurity Properties are Evaluated", 
-                "Unevaluated Cybersecurity Properties"
-            ]
+            if damage_record and damage_record.get("Details"):
+                damage_details = damage_record.get("Details", [])
+                for index, detail in enumerate(damage_details):
+                    ds_id = f"DS{index + 1:03}"
+                    ds_title = f"3.{index + 1} {ds_id}: {detail.get('Name', '')}"
+                    damage_scenario_data.append(Paragraph(ds_title, ParagraphStyle(
+                        'Heading2', fontSize=12, textColor=colors.black, fontName='Helvetica-Bold', spaceAfter=8)))
+                    damage_scenario_data.append(Paragraph(detail.get("Description", ""), ParagraphStyle(
+                        'Normal', fontSize=9, textColor=colors.black, fontName='Helvetica', spaceAfter=10, alignment=TA_JUSTIFY)))
 
-            dmg_columns = request.form.get('dmgScenTblClms', '').split(',')   
-            if not dmg_columns or dmg_columns == ['']:
-                dmg_columns = valid_columns
-            dmg_columns = [col for col in dmg_columns if col in valid_columns]
+                    # Build impact table
+                    table_data = [["Impact Domain", "Assessment and Rationale"]]
+                    impacts = detail.get("impacts", {})
 
-            if not dmg_columns:
-                damage_scenario_data = [["No valid columns provided"]]
+                    table_data.append(["Safety Impact", impacts.get("Safety Impact", "") or ""])
+                    table_data.append(["Operational Impact", impacts.get("Operational Impact", "") or ""])
+                    table_data.append(["Financial Impact", impacts.get("Financial Impact", "") or ""])
+                    table_data.append(["Privacy Impact", impacts.get("Privacy Impact", "") or ""])
+
+                    table = Table(table_data, colWidths=[150, 350], hAlign='LEFT')
+                    table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9F9F9')])
+                    ]))
+
+                    damage_scenario_data.append(table)
+                    damage_scenario_data.append(Spacer(1, 12))
             else:
-                if damage_record and damage_record.get("Details"):
-                    damage_details = damage_record.get("Details", [])
+                damage_scenario_data.append(Paragraph("No Damage Scenario Data Found", ParagraphStyle(
+                    'Normal', fontSize=10, textColor=colors.black, fontName='Helvetica')))
+            damage_scenario_data.append(PageBreak())
 
-                    damage_headers = [safe_wrap_content(col, 'white') for col in dmg_columns]
-                    damage_scenario_data = [damage_headers]
-
-                    for index, detail in enumerate(damage_details):
-                        cyber_losses = ", ".join(["Loss of " + loss["name"] for loss in detail.get("cyberLosses", [])][:3])
-                        assets = ", ".join(sorted({loss["node"] for loss in detail.get("cyberLosses", [])})[:3])
-                        impacts = detail.get("impacts", {})
-                        row = []
-
-                        for col in dmg_columns:
-                            if col == "ID":
-                                row.append(safe_wrap_content(f"DS{index + 1:03}", 'black'))
-                            elif col == "Name":
-                                row.append(safe_wrap_content(detail.get("Name", ""), 'black'))
-                            elif col == "Description/Scalability":
-                                row.append(safe_wrap_content(detail.get("Description", ""), 'black'))
-                            elif col == "Losses of Cybersecurity Properties":
-                                row.append(safe_wrap_content(cyber_losses, 'black'))
-                            elif col == "Assets":
-                                row.append(safe_wrap_content(assets, 'black'))
-                            elif col == "Safety Impact":
-                                safety_impact = impacts.get("Safety Impact", "")
-                                bg_color = getImpactBgcolour(safety_impact)
-                                row.append(safe_wrap_content(safety_impact, 'black', bg_color))
-                            elif col == "Financial Impact":
-                                financial_impact = impacts.get("Financial Impact", "")
-                                bg_color = getImpactBgcolour(financial_impact)
-                                row.append(safe_wrap_content(financial_impact, 'black', bg_color))
-                            elif col == "Operational Impact":
-                                operational_impact = impacts.get("Operational Impact", "")
-                                bg_color = getImpactBgcolour(operational_impact)
-                                row.append(safe_wrap_content(operational_impact, 'black', bg_color))
-                            elif col == "Privacy Impact":
-                                privacy_impact = impacts.get("Privacy Impact", "")
-                                bg_color = getImpactBgcolour(privacy_impact)
-                                row.append(safe_wrap_content(privacy_impact, 'black', bg_color))
-                            elif col == "Impact Justification":
-                                row.append(safe_wrap_content("", 'black'))
-                            elif col == "Associated Threat Scenarios":
-                                row.append(safe_wrap_content("", 'black'))
-                            elif col == "Overall Impact":
-                                overall_impact = get_highest_impact(impacts)
-                                bg_color = getImpactBgcolour(overall_impact)
-                                row.append(safe_wrap_content(overall_impact, 'black', bg_color))
-                            elif col == "Asset is Evaluated":
-                                row.append(safe_wrap_content("", 'black'))
-                            elif col == "Cybersecurity Properties are Evaluated":
-                                row.append(safe_wrap_content("", 'black'))
-                            elif col == "Unevaluated Cybersecurity Properties":
-                                row.append(safe_wrap_content("", 'black'))
-                        damage_scenario_data.append(row)
-                else:
-                    damage_scenario_data = [["No Damage Scenario Data Found"]]
 
         # ========================= Threat Scenario Table =========================
         if threat_scenarios_table == 1:
@@ -874,6 +935,7 @@ def generate_doc():
                         attack_tree_data.append(row)
                 else:
                     attack_tree_data = [["No Attack Tree Data Found"]]
+        
 
         # ========================= Risk Treatment Table =========================
         if risk_treatment == 1:
@@ -1068,7 +1130,9 @@ def generate_doc():
         pdf = SimpleDocTemplate(pdf_path, pagesize=letter, 
                                topMargin=0.5*inch, bottomMargin=0.5*inch,
                                leftMargin=0.4*inch, rightMargin=0.4*inch)
+
         elements = []
+        
 
         # Add Cover Page with dynamic project name from database
         elements.extend(create_cover_page(project_name))
@@ -1079,36 +1143,64 @@ def generate_doc():
         # Add Introduction Chapter with dynamic project name
         elements.extend(create_introduction_chapter(project_name))
 
-        # Add SVG diagram if provided
-        # Add SVG diagram if provided - UPDATED FOR FULL WIDTH
+      # Add SVG diagram if provided - DIRECT APPROACH
         svg_file = request.files.get('svg')
         if svg_file:
-            # Use larger dimensions for full page width
-            drawing = handle_svg_file(svg_file, max_width=510, max_height=650)
-            if drawing:
-                # Create a full-width title for the diagram
-                elements.append(Table([["Model Diagram"]], colWidths=[510], style=[
-                    ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 12),
-                    ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E8E8E8')),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-                    ('TOPPADDING', (0, 0), (-1, -1), 8),
-                ], hAlign='LEFT'))
-                elements.append(Spacer(1, 10))
+            try:
+                # Create a temporary file to store SVG content
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False) as temp_svg:
+                    svg_content = svg_file.read().decode('utf-8')
+                    temp_svg.write(svg_content)
+                    temp_svg_path = temp_svg.name
                 
-                # Center the drawing on the page
-                drawing_table = Table([[drawing]], colWidths=[510], hAlign='CENTER')
-                elements.append(drawing_table)
-                elements.append(PageBreak())
+                # Convert SVG to drawing
+                drawing = svg2rlg(temp_svg_path)
+                
+                if drawing:
+                    # Calculate available width (page width minus margins)
+                    available_width = 612 - (0.4 * 72) * 2  # 612 - 57.6 = 554.4 points
+                    available_height = 650  # Conservative height
+                    
+                    # Scale the drawing
+                    scale_x = available_width / drawing.width
+                    scale_y = available_height / drawing.height
+                    scale = min(scale_x, scale_y)
+                    
+                    drawing.width = drawing.width * scale
+                    drawing.height = drawing.height * scale
+                    drawing.scale(scale, scale)
+                    
+                    # Center the drawing
+                    drawing.hAlign = 'CENTER'
+                    
+                    # Add title
+                    elements.append(Table([["Model Diagram"]], colWidths=[available_width], style=[
+                        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 12),
+                        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E8E8E8')),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ]))
+                    elements.append(Spacer(1, 10))
+                    
+                    # Add the scaled drawing
+                    elements.append(drawing)
+                    elements.append(PageBreak())
+                
+                # Clean up
+                os.unlink(temp_svg_path)
+                
+            except Exception as e:
+                print(f"Error processing SVG: {e}")
 
         # Available width for tables
         available_width = 530
 
         # Add all requested tables with automatic column splitting
+        if asset_identification_table == 1 and asset_identification:
+            elements.extend(asset_identification)  
+
         if damage_scenarios_table == 1 and damage_scenario_data:
-            elements.extend(create_safe_table(damage_scenario_data, "Damage Scenario Table", available_width))
-            elements.append(PageBreak())
+            elements.extend(damage_scenario_data)
             
         if threat_scenarios_table == 1 and threat_scenario_data:
             elements.extend(create_safe_table(threat_scenario_data, "Threat Scenarios Table", available_width))
