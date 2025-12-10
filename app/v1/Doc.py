@@ -31,12 +31,21 @@ def add_page_number(canvas, doc):
     canvas.setFont('Helvetica', 9)
     canvas.drawRightString(200*mm, 10*mm, text)
 
-def create_cover_page(project_name="Battery Management System"):
-    """Create professional cover page elements matching the TARA report"""
+def create_cover_page(project_name="N/A",model_id=" "):
     elements = []
     styles = getSampleStyleSheet()
-    
-    # Create custom styles
+
+    # Fetch data
+    assets_record = db.Assets.find_one({"model_id": model_id})
+
+    # Handle missing fields safely
+    client_name = assets_record.get("client_name", "N/A")
+    # project_name = assets_record.get("project_name", "N/A")
+    version = assets_record.get("version", "1.0")
+    classification = assets_record.get("classification", "CONFIDENTIAL")
+    prepared_by = assets_record.get("prepared_by", "FucyTech")
+
+    # ---- Styles ----
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -72,13 +81,14 @@ def create_cover_page(project_name="Battery Management System"):
     
     # Document Information Table - Updated to match TARA report
     doc_info_data = [
+        # [Paragraph("<b>Client Corporation</b>", styles['Heading3']), client_name],
         [Paragraph("<b>Client Corporation</b>", styles['Heading3']), "Company XYZ Corporation"],
         [Paragraph("<b>Project Name</b>", styles['Heading3']), project_name],
         [Paragraph("<b>Document Title</b>", styles['Heading3']), "Threat Analysis and Risk Assessment Report"],
-        [Paragraph("<b>Version</b>", styles['Heading3']), "1.0 (Initial Release)"],
+        [Paragraph("<b>Version</b>", styles['Heading3']), version],
         [Paragraph("<b>Date</b>", styles['Heading3']), datetime.datetime.now().strftime("%B %d, %Y")],
-        [Paragraph("<b>Classification</b>", styles['Heading3']), "CONFIDENTIAL"],
-        [Paragraph("<b>Prepared By</b>", styles['Heading3']), "FucyTech"],
+        [Paragraph("<b>Classification</b>", styles['Heading3']), classification],
+        [Paragraph("<b>Prepared By</b>", styles['Heading3']), prepared_by],
     ]
     
     doc_info_table = Table(doc_info_data, colWidths=[200, 300])
@@ -114,21 +124,19 @@ def create_cover_page(project_name="Battery Management System"):
     copyright_title = Paragraph("<b>Company Copyright and Confidentiality Notice</b>", copyright_style)
     elements.append(copyright_title)
     elements.append(Spacer(1, 10))
-    
-    copyright_text = """<b>Copyright © 2025 FucyTech.</b> All rights reserved.<br/><br/>
-    This document contains proprietary and confidential information belonging to <b>Company XYZ Corporation</b>. 
-    The analysis within was performed by FucyTech. No part of this publication may be reproduced, distributed, 
-    or transmitted in any form or by any means without the prior written permission of Company XYZ Corporation. 
-    Unauthorized disclosure, use, or duplication of this document is strictly prohibited."""
-    
-    copyright_para = Paragraph(copyright_text, copyright_style)
-    elements.append(copyright_para)
-    
+
+    copyright_text = f"""
+    <b>Copyright © {datetime.datetime.now().year} {prepared_by}.</b> All rights reserved.<br/><br/>
+    This document contains proprietary and confidential information belonging to <b>{client_name}</b>.
+    The analysis within was performed by {prepared_by}. Unauthorized disclosure or duplication is strictly prohibited.
+    """
+
+    elements.append(Paragraph(copyright_text, copyright_style))
     elements.append(PageBreak())
     
     return elements
 
-def create_table_of_contents():
+def create_table_of_contents(project_name="N/A"):
     """Create table of contents matching the TARA report structure"""
     elements = []
     styles = getSampleStyleSheet()
@@ -152,10 +160,10 @@ def create_table_of_contents():
         ("1 Introduction and Scope", "1"),
         ("1.1 Purpose", "1"),
         ("1.2 Scope", "1"), 
-        ("1.3 Introduction to Battery Management System (BMS)", "1"),
+        (f"1.3 Introduction to {project_name}", "1"),
         ("2 Asset Identification", "3"),
         ("3 Damage Scenario and Impact Analysis", "4"),
-        ("3.1 DS001: Sensor Malfunction", "4"),
+        # ("3.1 DS001: Sensor Malfunction", "4"),
         ("4 Threat Analysis and Risk Determination", "5"),
         ("4.1 Example Threat Scenario: RT005", "5"),
         ("5 Cybersecurity Goals and Mitigation", "6"),
@@ -186,12 +194,29 @@ def create_table_of_contents():
     
     return elements
 
-def create_introduction_chapter(project_name="Battery Management System"):
-    """Create Chapter 1: Introduction and Scope matching TARA report"""
+def create_introduction_chapter(project_name="N/A",model_id=''):
+    """Create Chapter 1: Introduction and Scope dynamically based on DB data"""
     elements = []
     styles = getSampleStyleSheet()
-    
-    # Chapter Title
+
+    # Fetch asset record from MongoDB
+    assets_record = db.Assets.find_one({"model_id": model_id})
+
+    # Extract dynamic fields safely
+    # project_name = assets_record.get("project_name", "N/A")
+    # client_name = assets_record.get("client_name", "N/A")
+    client_name = "Company XYZ Corporation"
+    prepared_by = assets_record.get("prepared_by", "FucyTech")
+    version = assets_record.get("version", "1.0")
+    bms_intro_text = assets_record.get("intro", "")
+    # security_text = assets_record.get("security_text", " ")
+    security_text = " "
+    # bms_functions = assets_record.get("bms_functions", " ")
+    bms_functions= " "
+    # purpose_text = assets_record.get("purpose_text", " ")
+    purpose_text = " "
+
+    # styles
     chapter_title_style = ParagraphStyle(
         'ChapterTitle',
         parent=styles['Heading1'],
@@ -201,12 +226,7 @@ def create_introduction_chapter(project_name="Battery Management System"):
         alignment=TA_LEFT,
         fontName='Helvetica-Bold'
     )
-    
-    elements.append(Paragraph("Chapter 1", chapter_title_style))
-    elements.append(Paragraph("Introduction and Scope", chapter_title_style))
-    elements.append(Spacer(1, 20))
-    
-    # 1.1 Purpose
+
     section_title_style = ParagraphStyle(
         'SectionTitle',
         parent=styles['Heading2'],
@@ -216,7 +236,7 @@ def create_introduction_chapter(project_name="Battery Management System"):
         alignment=TA_LEFT,
         fontName='Helvetica-Bold'
     )
-    
+
     normal_style = ParagraphStyle(
         'Normal',
         parent=styles['Normal'],
@@ -226,63 +246,76 @@ def create_introduction_chapter(project_name="Battery Management System"):
         alignment=TA_JUSTIFY,
         fontName='Helvetica'
     )
-    
+
+    # Chapter headers
+    elements.append(Paragraph("Chapter 1", chapter_title_style))
+    elements.append(Paragraph("Introduction and Scope", chapter_title_style))
+    elements.append(Spacer(1, 20))
+
+    # 1.1 Purpose
     elements.append(Paragraph("1.1 Purpose", section_title_style))
-    purpose_text = f"""This Threat Analysis and Risk Assessment (TARA) report documents the cybersecurity risks associated with the {project_name} components. The purpose is to identify potential threats, analyze their feasibility and impact, determine the resulting risk level, and propose necessary cybersecurity requirements to mitigate those risks."""
+    # purpose_text = f"""
+    # This Threat Analysis and Risk Assessment (TARA) report documents the cybersecurity risks associated with 
+    # the {project_name}. The purpose is to identify potential threats, analyze their feasibility and impact, 
+    # determine the resulting risk level, and define cybersecurity requirements to mitigate those risks.
+    # """
     elements.append(Paragraph(purpose_text, normal_style))
     elements.append(Spacer(1, 10))
     
     # 1.2 Scope
     elements.append(Paragraph("1.2 Scope", section_title_style))
-    scope_text = f"""The TARA scope covers the core components of the {project_name} architecture, including:"""
+    scope_text = f"""The TARA scope covers the core components related to the {project_name} architecture, including:"""
     elements.append(Paragraph(scope_text, normal_style))
-    
-    # Scope bullet points - dynamically adjust based on project name
-    if "ADAS" in project_name.upper() or "Autonomous" in project_name:
+
+    # Dynamic bullet points based on project type
+    if "ADAS" in project_name.upper() or "AUTONOMOUS" in project_name.upper():
         bullet_points = [
             "<b>Sensor Group</b>: Cameras, LIDAR, Radar, and GPS/IMU.",
             "<b>ADAS ECU Central Processing Unit</b>: Core computational logic.",
-            "<b>Power Supply & Protection Unit</b>: System power integrity.", 
-            "<b>Communication & Security System</b>: Internal and external data links (e.g., Ultra-Sonic, Wireless Communication).",
-            "<b>Actuator Control Group</b>: Final control output for vehicle functions."
+            "<b>Power Supply & Protection Unit</b>: System power integrity.",
+            "<b>Communication & Security System</b>: Internal and external data links.",
+            "<b>Actuator Control Group</b>: Final vehicle control output."
         ]
-    elif "BMS" in project_name.upper() or "Battery" in project_name:
+    elif "BMS" in project_name.upper() or "BATTERY" in project_name.upper():
         bullet_points = [
-            "<b>Battery Pack Assembly</b>: High-voltage Lithium-ion battery cells and modules.",
-            "<b>Battery Management Unit</b>: Core monitoring and control logic.",
+            "<b>Battery Pack Assembly</b>: High-voltage Lithium-ion cells and modules.",
+            "<b>Battery Management Unit</b>: Core protection, monitoring & balancing.",
             "<b>Thermal Management System</b>: Cooling and heating components.",
-            "<b>Power Distribution Unit</b>: High-voltage power routing and safety.",
-            "<b>Communication Interface</b>: CAN bus and other communication protocols."
+            "<b>Power Distribution Unit</b>: High-voltage routing and safety units.",
+            "<b>Communication Interface</b>: CAN bus and data communication layers."
         ]
     else:
-        # Generic scope for other projects
         bullet_points = [
-            "<b>Core Processing Unit</b>: Main computational components.",
-            "<b>Sensor Systems</b>: Input data collection devices.",
-            "<b>Communication Interfaces</b>: Internal and external data links.",
-            "<b>Power Management</b>: System power supply and distribution.",
-            "<b>Control Systems</b>: Output and actuation components."
+            "<b>Core Processing Unit</b>: Main computational controller.",
+            "<b>Sensor Systems</b>: Input data collection components.",
+            "<b>Communication Interface</b>: Internal / external network communication.",
+            "<b>Power Management</b>: Electrical supply and distribution.",
+            "<b>Control Systems</b>: Actuation and output logic."
         ]
     
     for point in bullet_points:
         elements.append(Paragraph(f"• {point}", normal_style))
     
     elements.append(Spacer(1, 10))
-    
-    # 1.3 Introduction to Battery Management System (BMS)
-    elements.append(Paragraph("1.3 Introduction to Battery Management System (BMS)", section_title_style))
-    bms_intro_text = """The Battery Management System (BMS) is a critical component for electric vehicle (EV) safety and performance, often interconnected with ADAS functions for power management. Its primary role is to monitor and control the vehicle's high-voltage rechargeable battery pack (typically Lithium-ion)."""
+
+    # 1.3 Introduction to BMS
+    elements.append(Paragraph(f"1.3 Introduction to {project_name}", section_title_style))
+    # bms_intro_text = f"""
+    # The Battery Management System (BMS) plays a key role in electric vehicles and energy storage solutions. 
+    # It safeguards the battery pack and supports functional performance and cybersecurity, especially when integrated 
+    # with components such as {project_name}.
+    # """
     elements.append(Paragraph(bms_intro_text, normal_style))
     elements.append(Spacer(1, 10))
-    
-    # BMS Key functions
-    elements.append(Paragraph("Key functions include:", normal_style))
-    bms_functions = [
-        "<b>Monitoring</b>: Measuring cell voltages, currents, and temperatures.",
-        "<b>Protection</b>: Guarding against over-current, over-voltage, under-voltage, and thermal runaway.",
-        "<b>Control</b>: Managing cell balancing, state-of-charge (SoC), and state-of-health (SoH) calculations."
-    ]
-    
+
+    # Key functions
+    # elements.append(Paragraph("Key functions include:", normal_style))
+    # bms_functions = [
+    #     "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
+    #     "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
+    #     "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
+    # ]
+
     for function in bms_functions:
         elements.append(Paragraph(f"• {function}", normal_style))
     
@@ -301,24 +334,15 @@ def create_introduction_chapter(project_name="Battery Management System"):
         borderPadding=10,
         leftIndent=10
     )
-    
-    security_text = """<b>Company XYZ Corporation Internal Document</b> Page 2<br/><br/>
-The BMS is a major cybersecurity target due to its direct control over vehicle power and safety. Tampering with the BMS could lead to severe consequences, including premature battery failure, fire, or immediate vehicle shutdown, warranting its inclusion in a comprehensive risk assessment."""
+
+    # security_text = f"""
+    # <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
+    # The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
+    # direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
+    # requiring detailed risk evaluation.
+    # """
     elements.append(Paragraph(security_text, security_note_style))
-    
-    # Add footer note
-    footer_style = ParagraphStyle(
-        'Footer',
-        parent=styles['Normal'],
-        fontSize=8,
-        textColor=colors.gray,
-        alignment=TA_CENTER,
-        fontName='Helvetica'
-    )
-    
-    elements.append(Spacer(1, 20))
-    # elements.append(Paragraph("FucyTech Confidential | Prepared:fqpy5tglia@i3@26p6orgfioch | All Rights Reserved:e4jnTABA/VERSION 1.0", footer_style))
-    
+
     elements.append(PageBreak())
     
     return elements
@@ -1135,13 +1159,13 @@ def generate_doc():
         
 
         # Add Cover Page with dynamic project name from database
-        elements.extend(create_cover_page(project_name))
+        elements.extend(create_cover_page(project_name,model_id))
 
         # Add Table of Contents
-        elements.extend(create_table_of_contents())
+        elements.extend(create_table_of_contents(project_name))
 
         # Add Introduction Chapter with dynamic project name
-        elements.extend(create_introduction_chapter(project_name))
+        elements.extend(create_introduction_chapter(project_name,model_id))
 
       # Add SVG diagram if provided - DIRECT APPROACH
         svg_file = request.files.get('svg')
@@ -1205,6 +1229,53 @@ def generate_doc():
         if threat_scenarios_table == 1 and threat_scenario_data:
             elements.extend(create_safe_table(threat_scenario_data, "Threat Scenarios Table", available_width))
             elements.append(PageBreak())
+
+        # 2️⃣ MULTIPLE SVGs (field: attackTrees)
+        # -------------------------------------------------------------
+        attackTrees = request.files.getlist("attackTrees")
+        if attackTrees:
+            for index, svg_file in enumerate(attackTrees):
+                if not svg_file:
+                    continue
+
+                try:
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False) as temp_svg:
+                        temp_svg.write(svg_file.read().decode("utf-8"))
+                        temp_svg_path = temp_svg.name
+
+                    drawing = svg2rlg(temp_svg_path)
+
+                    if drawing:
+                        available_width = 612 - (0.4 * 72) * 2
+                        available_height = 650
+
+                        scale_x = available_width / drawing.width
+                        scale_y = available_height / drawing.height
+                        scale = min(scale_x, scale_y)
+
+                        drawing.width *= scale
+                        drawing.height *= scale
+                        drawing.scale(scale, scale)
+                        drawing.hAlign = "CENTER"
+
+                        diagram_title = f"Attack Tree {index + 1}"
+
+                        elements.append(
+                            Table([[diagram_title]], colWidths=[available_width], style=[
+                                ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                                ("FONTSIZE", (0, 0), (-1, -1), 12),
+                                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#E8E8E8")),
+                                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                            ])
+                        )
+                        elements.append(Spacer(1, 10))
+                        elements.append(drawing)
+                        elements.append(PageBreak())
+
+                    os.unlink(temp_svg_path)
+
+                except Exception as e:
+                    print(f"Error processing MULTIPLE SVG: {e}")
             
         if attack_trees_table == 1 and attack_tree_data:
             elements.extend(create_safe_table(attack_tree_data, "Attack Tree Table", available_width))

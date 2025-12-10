@@ -353,6 +353,20 @@ def clone_model_data_to_existing_model():
                 doc.pop('_id', None)  
                 doc['model_id'] = target_model_id  
                 db[collection_name].insert_one(doc)
+            
+        source_report = db['ReportsContent'].find_one(
+            {'model_id': source_model_id},
+            {'purpose': 1, 'intro': 1, 'scope': 1}  # only fetch these fields
+        )
+
+        if source_report:
+            new_report = {
+                'model_id': target_model_id,
+                'purpose': source_report.get('purpose'),
+                'intro': source_report.get('intro'),
+                'scope': source_report.get('scope')
+            }
+            db['ReportsContent'].insert_one(new_report)
 
         return jsonify({
             'message': 'Successfully cloned data from source model to target model (overwritten)',
