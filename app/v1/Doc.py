@@ -74,7 +74,7 @@ def create_cover_page(project_name="N/A",model_id=" "):
     elements.append(title)
     
     # Subtitle
-    subtitle = Paragraph("ADAS Central Processing Unit and Sensor System", subtitle_style)
+    subtitle = Paragraph(project_name, subtitle_style)
     elements.append(subtitle)
     
     elements.append(Spacer(1, 1*inch))
@@ -200,21 +200,19 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     styles = getSampleStyleSheet()
 
     # Fetch asset record from MongoDB
-    assets_record = db.Assets.find_one({"model_id": model_id})
-
+    # contents_record = db.ReportsContent.find_one({"model_id": model_id})
+    contents_record = db.ReportsContent.find_one({"model_id": model_id}) or {}
+    
     # Extract dynamic fields safely
-    # project_name = assets_record.get("project_name", "N/A")
-    # client_name = assets_record.get("client_name", "N/A")
-    client_name = "Company XYZ Corporation"
-    prepared_by = assets_record.get("prepared_by", "FucyTech")
-    version = assets_record.get("version", "1.0")
-    bms_intro_text = assets_record.get("intro", "")
-    # security_text = assets_record.get("security_text", " ")
-    security_text = " "
-    # bms_functions = assets_record.get("bms_functions", " ")
-    bms_functions= " "
-    # purpose_text = assets_record.get("purpose_text", " ")
-    purpose_text = " "
+    # project_name = contents_record.get("project_name", "N/A")
+    client_name = contents_record.get("client_name", "Company XYZ Corporation")
+    prepared_by = contents_record.get("prepared_by", "FucyTech")
+    version = contents_record.get("version", "1.0")
+    bms_intro_text = contents_record.get("intro", "")
+    scope = contents_record.get("scope", " ")
+    # security_text = contents_record.get("security_text", " ")
+    # bms_functions = contents_record.get("bms_functions", " ")
+    purpose_text = contents_record.get("purpose", " ")
 
     # styles
     chapter_title_style = ParagraphStyle(
@@ -264,37 +262,38 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     
     # 1.2 Scope
     elements.append(Paragraph("1.2 Scope", section_title_style))
-    scope_text = f"""The TARA scope covers the core components related to the {project_name} architecture, including:"""
-    elements.append(Paragraph(scope_text, normal_style))
+    # scope_text = f"""The TARA scope covers the core components related to the {project_name} architecture, including:"""
+    # elements.append(Paragraph(scope_text, normal_style))
+    elements.append(Paragraph(scope, normal_style))
 
-    # Dynamic bullet points based on project type
-    if "ADAS" in project_name.upper() or "AUTONOMOUS" in project_name.upper():
-        bullet_points = [
-            "<b>Sensor Group</b>: Cameras, LIDAR, Radar, and GPS/IMU.",
-            "<b>ADAS ECU Central Processing Unit</b>: Core computational logic.",
-            "<b>Power Supply & Protection Unit</b>: System power integrity.",
-            "<b>Communication & Security System</b>: Internal and external data links.",
-            "<b>Actuator Control Group</b>: Final vehicle control output."
-        ]
-    elif "BMS" in project_name.upper() or "BATTERY" in project_name.upper():
-        bullet_points = [
-            "<b>Battery Pack Assembly</b>: High-voltage Lithium-ion cells and modules.",
-            "<b>Battery Management Unit</b>: Core protection, monitoring & balancing.",
-            "<b>Thermal Management System</b>: Cooling and heating components.",
-            "<b>Power Distribution Unit</b>: High-voltage routing and safety units.",
-            "<b>Communication Interface</b>: CAN bus and data communication layers."
-        ]
-    else:
-        bullet_points = [
-            "<b>Core Processing Unit</b>: Main computational controller.",
-            "<b>Sensor Systems</b>: Input data collection components.",
-            "<b>Communication Interface</b>: Internal / external network communication.",
-            "<b>Power Management</b>: Electrical supply and distribution.",
-            "<b>Control Systems</b>: Actuation and output logic."
-        ]
+    # # Dynamic bullet points based on project type
+    # if "ADAS" in project_name.upper() or "AUTONOMOUS" in project_name.upper():
+    #     bullet_points = [
+    #         "<b>Sensor Group</b>: Cameras, LIDAR, Radar, and GPS/IMU.",
+    #         "<b>ADAS ECU Central Processing Unit</b>: Core computational logic.",
+    #         "<b>Power Supply & Protection Unit</b>: System power integrity.",
+    #         "<b>Communication & Security System</b>: Internal and external data links.",
+    #         "<b>Actuator Control Group</b>: Final vehicle control output."
+    #     ]
+    # elif "BMS" in project_name.upper() or "BATTERY" in project_name.upper():
+    #     bullet_points = [
+    #         "<b>Battery Pack Assembly</b>: High-voltage Lithium-ion cells and modules.",
+    #         "<b>Battery Management Unit</b>: Core protection, monitoring & balancing.",
+    #         "<b>Thermal Management System</b>: Cooling and heating components.",
+    #         "<b>Power Distribution Unit</b>: High-voltage routing and safety units.",
+    #         "<b>Communication Interface</b>: CAN bus and data communication layers."
+    #     ]
+    # else:
+    #     bullet_points = [
+    #         "<b>Core Processing Unit</b>: Main computational controller.",
+    #         "<b>Sensor Systems</b>: Input data collection components.",
+    #         "<b>Communication Interface</b>: Internal / external network communication.",
+    #         "<b>Power Management</b>: Electrical supply and distribution.",
+    #         "<b>Control Systems</b>: Actuation and output logic."
+    #     ]
     
-    for point in bullet_points:
-        elements.append(Paragraph(f"• {point}", normal_style))
+    # for point in bullet_points:
+    #     elements.append(Paragraph(f"• {point}", normal_style))
     
     elements.append(Spacer(1, 10))
 
@@ -309,12 +308,12 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     elements.append(Spacer(1, 10))
 
     # Key functions
-    # elements.append(Paragraph("Key functions include:", normal_style))
-    # bms_functions = [
-    #     "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
-    #     "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
-    #     "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
-    # ]
+    elements.append(Paragraph("Key functions include:", normal_style))
+    bms_functions = [
+        "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
+        "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
+        "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
+    ]
 
     for function in bms_functions:
         elements.append(Paragraph(f"• {function}", normal_style))
@@ -330,17 +329,17 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
         spaceAfter=12,
         alignment=TA_JUSTIFY,
         fontName='Helvetica',
-        backColor=colors.HexColor('#F2F2F2'),
+        # backColor=colors.HexColor('#F2F2F2'),
         borderPadding=10,
         leftIndent=10
     )
 
-    # security_text = f"""
-    # <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
-    # The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
-    # direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
-    # requiring detailed risk evaluation.
-    # """
+    security_text = f"""
+    <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
+    The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
+    direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
+    requiring detailed risk evaluation.
+    """
     elements.append(Paragraph(security_text, security_note_style))
 
     elements.append(PageBreak())
@@ -1143,6 +1142,7 @@ def generate_doc():
         # =========================== PDF Generation ===========================
         current_datetime = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         pdf_file_name = f"{project_name.replace(' ', '_')}({current_datetime})"
+        # pdf_file_name = "FILE"
         
         documents_folder = 'Documents'
         if not os.path.exists(documents_folder):
