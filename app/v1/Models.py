@@ -85,10 +85,9 @@ def get_unique_model():
         if not model_id or not re.match(r"^[0-9a-fA-F]{24}$", model_id):
             return jsonify({"error": "Invalid or missing model ID"}), 400
 
-        # Try to find in Models first
+        # ---- Find master model ----
         master_model = db.Models.find_one({"_id": ObjectId(model_id)})
 
-        # If not found in Models, try Libraries
         if not master_model:
             master_model = db.Libraries.find_one({"_id": ObjectId(model_id)})
             if not master_model:
@@ -96,6 +95,19 @@ def get_unique_model():
 
         master_model["_id"] = str(master_model["_id"])
 
+        # ---- Master model report_info ----
+        master_report = db.ReportsContent.find_one({"model_id": model_id})
+        master_model["report_info"] = (
+            {
+                "purpose": master_report.get("purpose"),
+                "intro": master_report.get("intro"),
+                "scope": master_report.get("scope"),
+            }
+            if master_report
+            else {}
+        )
+
+        # ---- Sub-models ----
         sub_system_ids = master_model.get("sub_systems", [])
         object_ids = [
             ObjectId(sid)
@@ -107,33 +119,45 @@ def get_unique_model():
         sub_models = []
 
         for model in sub_models_cursor:
-            model_id_str = str(model["_id"])
+            sub_model_id = str(model["_id"])
 
-            # Pick only required fields from model
+            # ---- Sub-model report_info (OWN model_id) ----
+            sub_report = db.ReportsContent.find_one({"model_id": sub_model_id})
+            sub_report_info = (
+                {
+                    "purpose": sub_report.get("purpose"),
+                    "intro": sub_report.get("intro"),
+                    "scope": sub_report.get("scope"),
+                }
+                if sub_report
+                else {}
+            )
+
             filtered_model = {
-                "_id": model_id_str,
+                "_id": sub_model_id,
                 "Created_at": model.get("Created_at"),
                 "created_by": model.get("created_by"),
                 "last_updated": model.get("last_updated"),
                 "name": model.get("name"),
                 "user_id": model.get("user_id"),
+                "report_info": sub_report_info,
             }
 
-            # Get only required asset fields
+            # ---- Assets ----
             assets_cursor = db.Assets.find(
-                {"model_id": model_id_str}, {"_id": 1, "model_id": 1, "template": 1}
+                {"model_id": sub_model_id},
+                {"_id": 1, "model_id": 1, "template": 1},
             )
-            filtered_assets = []
-            for asset in assets_cursor:
-                filtered_assets.append(
-                    {
-                        "_id": str(asset["_id"]),
-                        "model_id": asset["model_id"],
-                        "template": asset.get("template", []),
-                    }
-                )
 
-            filtered_model["assets"] = filtered_assets
+            filtered_model["assets"] = [
+                {
+                    "_id": str(asset["_id"]),
+                    "model_id": asset["model_id"],
+                    "template": asset.get("template", []),
+                }
+                for asset in assets_cursor
+            ]
+
             sub_models.append(filtered_model)
 
         master_model["sub_models"] = sub_models
@@ -147,12 +171,44 @@ def get_unique_model():
 def update_model_name():
     try:
         model_id = request.form.get("model-id")
-        name = request.form.get("name")
+
         if not model_id or not re.match(r"^[0-9a-fA-F]{24}$", model_id):
             return jsonify({"error": "Invalid or missing model ID"}), 400
 
-        db.Models.update_one({"_id": ObjectId(model_id)}, {"$set": {"name": name}})
-        return jsonify({"success": "model name changed"}), 202
+        # -------- Update Model Name (optional) --------
+        name = request.form.get("name")
+        if name:
+            db.Models.update_one(
+                {"_id": ObjectId(model_id)},
+                {"$set": {"name": name}}
+            )
+
+        # -------- Update Report Info (optional) --------
+        report_updates = {}
+
+        purpose = request.form.get("purpose")
+        intro = request.form.get("intro")
+        scope = request.form.get("scope")
+
+        if purpose is not None:
+            report_updates["purpose"] = purpose
+        if intro is not None:
+            report_updates["intro"] = intro
+        if scope is not None:
+            report_updates["scope"] = scope
+
+        if report_updates:
+            db.ReportsContent.update_one(
+                {"model_id": model_id},
+                {
+                    "$set": report_updates,
+                    "$setOnInsert": {"model_id": model_id}
+                },
+                upsert=True
+            )
+
+        return jsonify({"success": "Model updated successfully"}), 202
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
