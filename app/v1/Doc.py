@@ -6,7 +6,7 @@ from reportlab.platypus import Image
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer
 from reportlab.lib import colors
 from db import db
-from reportlab.platypus import Paragraph
+from reportlab.platypus import Paragraph, Preformatted
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 from app.Methods.helpers import get_highest_impact,get_threat_type,resize_image,generate_sas_url,getImpactBgcolour,getFesRateBgColor
@@ -208,7 +208,8 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     client_name = contents_record.get("client_name", "Company XYZ Corporation")
     prepared_by = contents_record.get("prepared_by", "FucyTech")
     version = contents_record.get("version", "1.0")
-    bms_intro_text = contents_record.get("intro", "")
+    text = contents_record.get("intro", "")
+    bms_intro_text = text.replace("\n", "<br/>")
     scope = contents_record.get("scope", " ")
     # security_text = contents_record.get("security_text", " ")
     # bms_functions = contents_record.get("bms_functions", " ")
@@ -304,19 +305,20 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     # It safeguards the battery pack and supports functional performance and cybersecurity, especially when integrated 
     # with components such as {project_name}.
     # """
-    elements.append(Paragraph(bms_intro_text, normal_style))
+    # elements.append(Paragraph(bms_intro_text, normal_style))
+    elements.append(Preformatted(bms_intro_text, normal_style))
     elements.append(Spacer(1, 10))
 
     # Key functions
-    elements.append(Paragraph("Key functions include:", normal_style))
-    bms_functions = [
-        "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
-        "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
-        "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
-    ]
+    # elements.append(Paragraph("Key functions include:", normal_style))
+    # bms_functions = [
+    #     "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
+    #     "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
+    #     "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
+    # ]
 
-    for function in bms_functions:
-        elements.append(Paragraph(f"• {function}", normal_style))
+    # for function in bms_functions:
+    #     elements.append(Paragraph(f"• {function}", normal_style))
     
     elements.append(Spacer(1, 15))
     
@@ -334,13 +336,13 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
         leftIndent=10
     )
 
-    security_text = f"""
-    <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
-    The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
-    direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
-    requiring detailed risk evaluation.
-    """
-    elements.append(Paragraph(security_text, security_note_style))
+    # security_text = f"""
+    # <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
+    # The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
+    # direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
+    # requiring detailed risk evaluation.
+    # """
+    # elements.append(Paragraph(security_text, security_note_style))
 
     elements.append(PageBreak())
     
