@@ -208,12 +208,14 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     client_name = contents_record.get("client_name", "Company XYZ Corporation")
     prepared_by = contents_record.get("prepared_by", "FucyTech")
     version = contents_record.get("version", "1.0")
-    text = contents_record.get("intro", "")
-    bms_intro_text = text.replace("\n", "<br/>")
-    scope = contents_record.get("scope", " ")
+    br_text = contents_record.get("intro", "")
+    bms_intro_text = br_text.replace("\n", "<br/>")
+    br_scope = contents_record.get("scope", " ")
+    scope = br_scope.replace("\n", "<br/>")
     # security_text = contents_record.get("security_text", " ")
     # bms_functions = contents_record.get("bms_functions", " ")
-    purpose_text = contents_record.get("purpose", " ")
+    br_purpose_text = contents_record.get("purpose", " ")
+    purpose_text = br_purpose_text.replace("\n", "<br/>")
 
     # styles
     chapter_title_style = ParagraphStyle(
@@ -305,8 +307,8 @@ def create_introduction_chapter(project_name="N/A",model_id=''):
     # It safeguards the battery pack and supports functional performance and cybersecurity, especially when integrated 
     # with components such as {project_name}.
     # """
-    # elements.append(Paragraph(bms_intro_text, normal_style))
-    elements.append(Preformatted(bms_intro_text, normal_style))
+    elements.append(Paragraph(bms_intro_text, normal_style))
+    # elements.append(Preformatted(bms_intro_text, normal_style))
     elements.append(Spacer(1, 10))
 
     # Key functions
