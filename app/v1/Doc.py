@@ -21,15 +21,200 @@ from reportlab.lib.units import inch
 import tempfile
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+from reportlab.platypus.tableofcontents import TableOfContents
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus.tableofcontents import SimpleIndex
 
 app = Blueprint("doc", __name__)
 
+class MyDocTemplate(SimpleDocTemplate):
+    """Custom template that tracks page numbers for TOC"""
+    def __init__(self, filename, **kw):
+        super().__init__(filename, **kw)
+        self.canv = None
+        
+    def afterFlowable(self, flowable):
+        """Automatically called after each flowable is processed"""
+        # This allows TOC to register entries with page numbers
+        if hasattr(flowable, 'getPlainText'):
+            text = flowable.getPlainText()
+            style_name = flowable.style.name if hasattr(flowable, 'style') else None
+            
+            # Register major sections for TOC with proper level (integer)
+            if style_name == 'TOCHeading':
+                # Level 0 for main chapters
+                self.notify('TOCEntry', (0, text, self.page))
+            elif style_name == 'SectionTitle':
+                # Level 1 for subsections
+                self.notify('TOCEntry', (1, text, self.page))
+
+def create_dynamic_toc(project_name="N/A"):
+    """Create dynamic Table of Contents that auto-updates"""
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # TOC Title
+    title_style = ParagraphStyle(
+        'TOC_Title',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor=colors.black,
+        spaceAfter=30,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+    
+    elements.append(Paragraph("Contents", title_style))
+    elements.append(Spacer(1, 20))
+    
+    # Create TableOfContents object
+    toc = TableOfContents()
+    
+    # Define styles for different TOC levels
+    toc.levelStyles = [
+        ParagraphStyle(
+            name='TOCHeading1',
+            fontSize=12,
+            fontName='Helvetica-Bold',
+            leftIndent=0,
+            firstLineIndent=0,
+            spaceBefore=5,
+            leading=16
+        ),
+        ParagraphStyle(
+            name='TOCHeading2',
+            fontSize=10,
+            fontName='Helvetica',
+            leftIndent=20,
+            firstLineIndent=0,
+            spaceBefore=3,
+            leading=14
+        ),
+    ]
+    
+    elements.append(toc)
+    elements.append(PageBreak())
+    
+    return elements
+
+def create_introduction_chapter_dynamic(project_name="N/A", model_id=''):
+    """Create Chapter 1 with TOC bookmarks"""
+    elements = []
+    styles = getSampleStyleSheet()
+
+    contents_record = db.ReportsContent.find_one({"model_id": model_id}) or {}
+    
+    client_name = contents_record.get("client_name", "Company XYZ Corporation")
+    br_text = contents_record.get("intro", "")
+    bms_intro_text = br_text.replace("\n", "<br/>")
+    br_scope = contents_record.get("scope", " ")
+    scope = br_scope.replace("\n", "<br/>")
+    br_purpose_text = contents_record.get("purpose", " ")
+    purpose_text = br_purpose_text.replace("\n", "<br/>")
+
+    # Styles with TOC registration
+    chapter_title_style = ParagraphStyle(
+        'ChapterTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor=colors.black,
+        spaceAfter=20,
+        alignment=TA_LEFT,
+        fontName='Helvetica-Bold'
+    )
+
+    section_title_style = ParagraphStyle(
+        'SectionTitle',
+        parent=styles['Heading2'],
+        fontSize=12,
+        textColor=colors.black,
+        spaceAfter=10,
+        alignment=TA_LEFT,
+        fontName='Helvetica-Bold'
+    )
+
+    normal_style = ParagraphStyle(
+        'Normal',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.black,
+        spaceAfter=12,
+        alignment=TA_JUSTIFY,
+        fontName='Helvetica'
+    )
+
+    # Add bookmarks for TOC - Format: <a name="bookmark_name"/>content
+    heading_style = ParagraphStyle(
+        'TOCHeading',
+        parent=styles['Heading1'],
+        fontSize=16,
+        textColor=colors.black,
+        spaceAfter=20,
+        alignment=TA_LEFT,
+        fontName='Helvetica-Bold'
+    )
+    
+    # Chapter heading with bookmark
+    elements.append(Paragraph('<a name="chapter1"/>1. Introduction and Scope', heading_style))
+    elements.append(Spacer(1, 20))
+
+    # Subsections with bookmarks
+    elements.append(Paragraph('<a name="purpose"/>1.1 Purpose', section_title_style))
+    elements.append(Paragraph(purpose_text, normal_style))
+    elements.append(Spacer(1, 10))
+    
+    elements.append(Paragraph('<a name="scope"/>1.2 Scope', section_title_style))
+    elements.append(Paragraph(scope, normal_style))
+    elements.append(Spacer(1, 10))
+
+    elements.append(Paragraph(f'<a name="intro_project"/>1.3 Introduction to {project_name}', section_title_style))
+    elements.append(Paragraph(bms_intro_text, normal_style))
+    elements.append(Spacer(1, 15))
+
+    elements.append(PageBreak())
+    
+    return elements
+
+def add_section_bookmark(elements, title, bookmark_name, level=1):
+    """Helper function to add section with TOC bookmark"""
+    styles = getSampleStyleSheet()
+    
+    if level == 1:
+        style = ParagraphStyle(
+            'TOCHeading',
+            parent=styles['Heading1'],
+            fontSize=14,
+            textColor=colors.black,
+            spaceAfter=15,
+            fontName='Helvetica-Bold'
+        )
+    else:
+        style = ParagraphStyle(
+            'SectionTitle',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.black,
+            spaceAfter=10,
+            fontName='Helvetica-Bold'
+        )
+    
+    elements.append(Paragraph(f'<a name="{bookmark_name}"/>{title}', style))
+    elements.append(Spacer(1, 10))
+
 def add_page_number(canvas, doc):
-    """Add page numbers to footer"""
+    """Add dynamic page numbers to footer"""
     page_num = canvas.getPageNumber()
     text = "Page %d" % page_num
+    
+    # Get page dimensions
+    page_width = doc.pagesize[0]
+    page_height = doc.pagesize[1]
+    
+    # Set font
     canvas.setFont('Helvetica', 9)
-    canvas.drawRightString(200*mm, 10*mm, text)
+    
+    # Draw page number at bottom right (10mm from bottom, 15mm from right edge)
+    canvas.drawRightString(page_width - 15*mm, 10*mm, text)
 
 def create_cover_page(project_name="N/A",model_id=" "):
     elements = []
@@ -136,219 +321,6 @@ def create_cover_page(project_name="N/A",model_id=" "):
     
     return elements
 
-def create_table_of_contents(project_name="N/A"):
-    """Create table of contents matching the TARA report structure"""
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    # Title
-    title_style = ParagraphStyle(
-        'TOC_Title',
-        parent=styles['Heading1'],
-        fontSize=16,
-        textColor=colors.black,
-        spaceAfter=30,
-        alignment=TA_CENTER,
-        fontName='Helvetica-Bold'
-    )
-    
-    elements.append(Paragraph("Contents", title_style))
-    elements.append(Spacer(1, 20))
-    
-    # TOC entries matching the TARA report structure
-    toc_entries = [
-        ("1 Introduction and Scope", "1"),
-        ("1.1 Purpose", "1"),
-        ("1.2 Scope", "1"), 
-        (f"1.3 Introduction to {project_name}", "1"),
-        ("2 Asset Identification", "3"),
-        ("3 Damage Scenario and Impact Analysis", "4"),
-        # ("3.1 DS001: Sensor Malfunction", "4"),
-        ("4 Threat Analysis and Risk Determination", "5"),
-        ("4.1 Example Threat Scenario: RT005", "5"),
-        ("5 Cybersecurity Goals and Mitigation", "6"),
-        ("5.1 Cybersecurity Goals", "6"),
-        ("5.2 Security Requirements (Mitigation Controls)", "6")
-    ]
-    
-    # Create TOC table
-    toc_data = []
-    for entry, page in toc_entries:
-        # Create dotted leader
-        leader = '.' * (60 - len(entry) - len(page))
-        toc_data.append([entry, leader, page])
-    
-    toc_table = Table(toc_data, colWidths=[300, 150, 50])
-    toc_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    
-    elements.append(toc_table)
-    elements.append(PageBreak())
-    
-    return elements
-
-def create_introduction_chapter(project_name="N/A",model_id=''):
-    """Create Chapter 1: Introduction and Scope dynamically based on DB data"""
-    elements = []
-    styles = getSampleStyleSheet()
-
-    # Fetch asset record from MongoDB
-    # contents_record = db.ReportsContent.find_one({"model_id": model_id})
-    contents_record = db.ReportsContent.find_one({"model_id": model_id}) or {}
-    
-    # Extract dynamic fields safely
-    # project_name = contents_record.get("project_name", "N/A")
-    client_name = contents_record.get("client_name", "Company XYZ Corporation")
-    prepared_by = contents_record.get("prepared_by", "FucyTech")
-    version = contents_record.get("version", "1.0")
-    br_text = contents_record.get("intro", "")
-    bms_intro_text = br_text.replace("\n", "<br/>")
-    br_scope = contents_record.get("scope", " ")
-    scope = br_scope.replace("\n", "<br/>")
-    # security_text = contents_record.get("security_text", " ")
-    # bms_functions = contents_record.get("bms_functions", " ")
-    br_purpose_text = contents_record.get("purpose", " ")
-    purpose_text = br_purpose_text.replace("\n", "<br/>")
-
-    # styles
-    chapter_title_style = ParagraphStyle(
-        'ChapterTitle',
-        parent=styles['Heading1'],
-        fontSize=16,
-        textColor=colors.black,
-        spaceAfter=20,
-        alignment=TA_LEFT,
-        fontName='Helvetica-Bold'
-    )
-
-    section_title_style = ParagraphStyle(
-        'SectionTitle',
-        parent=styles['Heading2'],
-        fontSize=12,
-        textColor=colors.black,
-        spaceAfter=10,
-        alignment=TA_LEFT,
-        fontName='Helvetica-Bold'
-    )
-
-    normal_style = ParagraphStyle(
-        'Normal',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.black,
-        spaceAfter=12,
-        alignment=TA_JUSTIFY,
-        fontName='Helvetica'
-    )
-
-    # Chapter headers
-    elements.append(Paragraph("Chapter 1", chapter_title_style))
-    elements.append(Paragraph("Introduction and Scope", chapter_title_style))
-    elements.append(Spacer(1, 20))
-
-    # 1.1 Purpose
-    elements.append(Paragraph("1.1 Purpose", section_title_style))
-    # purpose_text = f"""
-    # This Threat Analysis and Risk Assessment (TARA) report documents the cybersecurity risks associated with 
-    # the {project_name}. The purpose is to identify potential threats, analyze their feasibility and impact, 
-    # determine the resulting risk level, and define cybersecurity requirements to mitigate those risks.
-    # """
-    elements.append(Paragraph(purpose_text, normal_style))
-    elements.append(Spacer(1, 10))
-    
-    # 1.2 Scope
-    elements.append(Paragraph("1.2 Scope", section_title_style))
-    # scope_text = f"""The TARA scope covers the core components related to the {project_name} architecture, including:"""
-    # elements.append(Paragraph(scope_text, normal_style))
-    elements.append(Paragraph(scope, normal_style))
-
-    # # Dynamic bullet points based on project type
-    # if "ADAS" in project_name.upper() or "AUTONOMOUS" in project_name.upper():
-    #     bullet_points = [
-    #         "<b>Sensor Group</b>: Cameras, LIDAR, Radar, and GPS/IMU.",
-    #         "<b>ADAS ECU Central Processing Unit</b>: Core computational logic.",
-    #         "<b>Power Supply & Protection Unit</b>: System power integrity.",
-    #         "<b>Communication & Security System</b>: Internal and external data links.",
-    #         "<b>Actuator Control Group</b>: Final vehicle control output."
-    #     ]
-    # elif "BMS" in project_name.upper() or "BATTERY" in project_name.upper():
-    #     bullet_points = [
-    #         "<b>Battery Pack Assembly</b>: High-voltage Lithium-ion cells and modules.",
-    #         "<b>Battery Management Unit</b>: Core protection, monitoring & balancing.",
-    #         "<b>Thermal Management System</b>: Cooling and heating components.",
-    #         "<b>Power Distribution Unit</b>: High-voltage routing and safety units.",
-    #         "<b>Communication Interface</b>: CAN bus and data communication layers."
-    #     ]
-    # else:
-    #     bullet_points = [
-    #         "<b>Core Processing Unit</b>: Main computational controller.",
-    #         "<b>Sensor Systems</b>: Input data collection components.",
-    #         "<b>Communication Interface</b>: Internal / external network communication.",
-    #         "<b>Power Management</b>: Electrical supply and distribution.",
-    #         "<b>Control Systems</b>: Actuation and output logic."
-    #     ]
-    
-    # for point in bullet_points:
-    #     elements.append(Paragraph(f"• {point}", normal_style))
-    
-    elements.append(Spacer(1, 10))
-
-    # 1.3 Introduction to BMS
-    elements.append(Paragraph(f"1.3 Introduction to {project_name}", section_title_style))
-    # bms_intro_text = f"""
-    # The Battery Management System (BMS) plays a key role in electric vehicles and energy storage solutions. 
-    # It safeguards the battery pack and supports functional performance and cybersecurity, especially when integrated 
-    # with components such as {project_name}.
-    # """
-    elements.append(Paragraph(bms_intro_text, normal_style))
-    # elements.append(Preformatted(bms_intro_text, normal_style))
-    elements.append(Spacer(1, 10))
-
-    # Key functions
-    # elements.append(Paragraph("Key functions include:", normal_style))
-    # bms_functions = [
-    #     "<b>Monitoring</b>: Measuring cell voltage, current and temperature parameters.",
-    #     "<b>Protection</b>: Preventing over-voltage, under-voltage, short circuit and thermal runaway.",
-    #     "<b>Control</b>: Cell balancing, SoC calculation and SoH management."
-    # ]
-
-    # for function in bms_functions:
-    #     elements.append(Paragraph(f"• {function}", normal_style))
-    
-    elements.append(Spacer(1, 15))
-    
-    # BMS Security Note
-    security_note_style = ParagraphStyle(
-        'SecurityNote',
-        parent=styles['Normal'],
-        fontSize=10,
-        textColor=colors.black,
-        spaceAfter=12,
-        alignment=TA_JUSTIFY,
-        fontName='Helvetica',
-        # backColor=colors.HexColor('#F2F2F2'),
-        borderPadding=10,
-        leftIndent=10
-    )
-
-    # security_text = f"""
-    # <b>{client_name} Internal Document</b> — Version {version}<br/><br/>
-    # The {project_name} and its battery-related control modules represent major cybersecurity targets due to 
-    # direct control over vehicle safety and power. Any compromise could lead to hazardous outcomes, 
-    # requiring detailed risk evaluation.
-    # """
-    # elements.append(Paragraph(security_text, security_note_style))
-
-    elements.append(PageBreak())
-    
-    return elements
 
 def safe_wrap_content(content, text_color='black', bg_color=None, max_length=100):
     """Safely wrap content with strict limits to prevent oversized cells"""
@@ -732,7 +704,7 @@ def generate_doc():
 
             # ✅ Wider, professional header
             col_widths = [70, 130, 220, 110]  # Adds up to ≈530
-            asset_table_title = Table([["Asset Identification"]], colWidths=[530], hAlign='LEFT')
+            asset_table_title = Table([["Asset Identification Table"]], colWidths=[530], hAlign='LEFT')
             asset_table_title.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, -1), 10),
@@ -783,8 +755,8 @@ def generate_doc():
             ]))
             damage_scenario_data.append(damage_scenario_title_table)
             damage_scenario_data.append(Spacer(1, 6))
-            damage_scenario_data.append(Paragraph("Damage Scenario and Impact Analysis", ParagraphStyle(
-                'Heading1', fontSize=14, textColor=colors.black, fontName='Helvetica-Bold', spaceAfter=18)))
+            # damage_scenario_data.append(Paragraph("Damage Scenario and Impact Analysis", ParagraphStyle(
+            #     'Heading1', fontSize=14, textColor=colors.black, fontName='Helvetica-Bold', spaceAfter=18)))
 
             if damage_record and damage_record.get("Details"):
                 damage_details = damage_record.get("Details", [])
@@ -1155,7 +1127,7 @@ def generate_doc():
         pdf_path = os.path.join(documents_folder, pdf_file_name + ".pdf")
         
         # Use standard letter size with reasonable margins
-        pdf = SimpleDocTemplate(pdf_path, pagesize=letter, 
+        pdf = MyDocTemplate(pdf_path, pagesize=letter, 
                                topMargin=0.5*inch, bottomMargin=0.5*inch,
                                leftMargin=0.4*inch, rightMargin=0.4*inch)
 
@@ -1166,10 +1138,10 @@ def generate_doc():
         elements.extend(create_cover_page(project_name,model_id))
 
         # Add Table of Contents
-        elements.extend(create_table_of_contents(project_name))
+        elements.extend(create_dynamic_toc(project_name))
 
         # Add Introduction Chapter with dynamic project name
-        elements.extend(create_introduction_chapter(project_name,model_id))
+        elements.extend(create_introduction_chapter_dynamic(project_name, model_id))
 
       # Add SVG diagram if provided - DIRECT APPROACH
         svg_file = request.files.get('svg')
@@ -1225,12 +1197,15 @@ def generate_doc():
 
         # Add all requested tables with automatic column splitting
         if asset_identification_table == 1 and asset_identification:
+            add_section_bookmark(elements, "2. Asset Identification", "asset_id")
             elements.extend(asset_identification)  
 
         if damage_scenarios_table == 1 and damage_scenario_data:
+            add_section_bookmark(elements, "3. Damage Scenario and Impact Analysis", "damage_scenarios")
             elements.extend(damage_scenario_data)
             
         if threat_scenarios_table == 1 and threat_scenario_data:
+            add_section_bookmark(elements, "4. Threat Analysis and Risk Determination", "threat_scenarios")
             elements.extend(create_safe_table(threat_scenario_data, "Threat Scenarios Table", available_width))
             elements.append(PageBreak())
 
@@ -1282,15 +1257,17 @@ def generate_doc():
                     print(f"Error processing MULTIPLE SVG: {e}")
             
         if attack_trees_table == 1 and attack_tree_data:
+            add_section_bookmark(elements, "5. Attack Trees", "attack_trees")
             elements.extend(create_safe_table(attack_tree_data, "Attack Tree Table", available_width))
             elements.append(PageBreak())
             
         if risk_treatment == 1 and risk_trtmnt_data:
-            elements.extend(create_safe_table(risk_trtmnt_data, "Risk Treatment Table", available_width))
+            add_section_bookmark(elements, "6. Risk Determination and Risk Treatment Decision", "risk_treatment")
+            elements.extend(create_safe_table(risk_trtmnt_data, "Threat Assessment & Risk Treatment Table", available_width))
             elements.append(PageBreak())
 
         # Build PDF with page numbers
-        pdf.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
+        pdf.multiBuild(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
 
         # ========================= Azure Blob Storage Upload =========================
         azure_connection_string = Config.AZURE_CONNECTION_STRING
