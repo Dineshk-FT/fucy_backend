@@ -9,7 +9,7 @@ from db import db
 from reportlab.platypus import Paragraph, Preformatted
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
-from app.Methods.helpers import get_highest_impact,get_threat_type,resize_image,generate_sas_url,getImpactBgcolour,getFesRateBgColor
+from app.Methods.helpers import get_highest_impact,get_threat_type,resize_image,generate_sas_url,getImpactBgcolour,getFesRateBgColor,html_to_reportlab
 import datetime
 from azure.storage.blob import BlobServiceClient, ContentSettings
 import os
@@ -106,11 +106,11 @@ def create_introduction_chapter_dynamic(project_name="N/A", model_id=''):
     
     client_name = contents_record.get("client_name", "Company XYZ Corporation")
     br_text = contents_record.get("intro", "")
-    bms_intro_text = br_text.replace("\n", "<br/>")
+    bms_intro_text = html_to_reportlab(br_text)
     br_scope = contents_record.get("scope", " ")
-    scope = br_scope.replace("\n", "<br/>")
+    scope = html_to_reportlab(br_scope)
     br_purpose_text = contents_record.get("purpose", " ")
-    purpose_text = br_purpose_text.replace("\n", "<br/>")
+    purpose_text = html_to_reportlab(br_purpose_text)
 
     # Styles with TOC registration
     chapter_title_style = ParagraphStyle(
@@ -1208,7 +1208,9 @@ def generate_doc():
             add_section_bookmark(elements, "4. Threat Analysis and Risk Determination", "threat_scenarios")
             elements.extend(create_safe_table(threat_scenario_data, "Threat Scenarios Table", available_width))
             elements.append(PageBreak())
-
+            
+        if attack_trees_table == 1 and attack_tree_data:
+            add_section_bookmark(elements, "5. Attack Trees", "attack_trees")
         # 2️⃣ MULTIPLE SVGs (field: attackTrees)
         # -------------------------------------------------------------
         attackTrees = request.files.getlist("attackTrees")
@@ -1257,10 +1259,9 @@ def generate_doc():
                     print(f"Error processing MULTIPLE SVG: {e}")
             
         if attack_trees_table == 1 and attack_tree_data:
-            add_section_bookmark(elements, "5. Attack Trees", "attack_trees")
             elements.extend(create_safe_table(attack_tree_data, "Attack Tree Table", available_width))
             elements.append(PageBreak())
-            
+
         if risk_treatment == 1 and risk_trtmnt_data:
             add_section_bookmark(elements, "6. Risk Determination and Risk Treatment Decision", "risk_treatment")
             elements.extend(create_safe_table(risk_trtmnt_data, "Threat Assessment & Risk Treatment Table", available_width))

@@ -619,4 +619,52 @@ def safe_json_parse(content):
             pass
 
     return None
+
+
+def html_to_reportlab(html: str) -> str:
+    if not html:
+        return ""
+
+    text = html.strip()
+
+    # paragraphs
+    text = re.sub(r'</p\s*>', '<br/><br/>', text, flags=re.I)
+    text = re.sub(r'<p[^>]*>', '', text, flags=re.I)
+
+    # bold / italic
+    text = re.sub(r'<\s*strong\s*>', '<b>', text, flags=re.I)
+    text = re.sub(r'<\s*/\s*strong\s*>', '</b>', text, flags=re.I)
+    text = re.sub(r'<\s*em\s*>', '<i>', text, flags=re.I)
+    text = re.sub(r'<\s*/\s*em\s*>', '</i>', text, flags=re.I)
+
+    # underline
+    text = re.sub(r'<\s*u\s*>', '<u>', text, flags=re.I)
+    text = re.sub(r'<\s*/\s*u\s*>', '</u>', text, flags=re.I)
+
+    # color span → font
+    def rgb_to_hex(match):
+        r, g, b = map(int, match.groups())
+        return f'<font color="#{r:02x}{g:02x}{b:02x}">'
+
+    text = re.sub(
+        r'<span[^>]*style="[^"]*color:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)[^"]*"[^>]*>',
+        rgb_to_hex,
+        text,
+        flags=re.I
+    )
+    text = re.sub(r'</span\s*>', '</font>', text, flags=re.I)
+
+    # normalize br
+    text = re.sub(r'<br\s*>', '<br/>', text, flags=re.I)
+
+    # remove unsupported tags (lists, divs, etc.)
+    text = re.sub(
+        r'<(?!/?(b|i|u|font|br)\b)[^>]*>',
+        '',
+        text,
+        flags=re.I
+    )
+
+    return text
+
     

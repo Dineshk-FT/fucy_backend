@@ -2,15 +2,16 @@ from flask import Blueprint, request, jsonify,json
 from config import Config
 import uuid
 from db import db
+import os
 
 import google.generativeai as genai
 
 app = Blueprint("prompt", __name__)
 
-GENAI_API_KEY = Config.GENAI_API_KEY
 
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 # =================Gemini============================
-genai.configure(api_key=GENAI_API_KEY)
+genai.configure(api_key=GOOGLE_API_KEY)
 
 def create_attack_tree(attack_data):
     attack_tree = {
