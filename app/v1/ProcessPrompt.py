@@ -1,5 +1,4 @@
 from flask import Blueprint, request, jsonify,json
-from config import Config
 import uuid
 from db import db
 import os

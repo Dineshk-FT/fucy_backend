@@ -13,6 +13,5 @@ class Config:
     MAIL_DEFAULT_SENDER = 'dinesh.ravi.kumar115@gmail.com'
     
     # API Keys (Note: Consider moving these to environment variables)
-    GENAI_API_KEY = "AIzaSyDHYoIyp48qUtq1czC0C3DwddggtP73Osw"
-    GOOGLE_API_KEY = "AIzaSyAiVDewjdJj3wPSCMj3BFXwdKXpUDNHEVA"
+
     AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net"

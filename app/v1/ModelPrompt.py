@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 import google.generativeai as genai
-from config import Config
+import os
 import ast
 import json
 import re
@@ -27,7 +27,8 @@ class JSONEncoder(json.JSONEncoder):
 
 modelprompt = Blueprint("modelprompt", __name__)
 
-genai.configure(api_key=Config.GOOGLE_API_KEY)
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 
