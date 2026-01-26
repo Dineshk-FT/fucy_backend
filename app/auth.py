@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 stripe_key = os.getenv('STRIPE_SECRET_KEY')
 stripe.api_key = stripe_key
+
 def generate_license_key():
     """Generate a unique license key in the format: XXXX-XXXX-XXXX-XXXX""" 
     chars = string.ascii_uppercase + string.digits
