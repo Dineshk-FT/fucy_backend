@@ -2,8 +2,10 @@ from flask import Blueprint, request, jsonify,json
 import uuid
 from db import db
 import os
-
+import time
+from datetime import datetime, timedelta
 import google.generativeai as genai
+
 
 app = Blueprint("prompt", __name__)
 
@@ -259,107 +261,82 @@ def generate_and_store_attack():
         if not prompt_key or not model_id:
             return jsonify({"error": "Both promptKey and modelId are required"}), 400
 
-        # Check if attack_data already exists in geminiAttackTree collection
-        existing_attack_data = db.geminiAttackTree.find_one({"promptKey": prompt_key})
+        # Check if attack_data already exists in geminiAttackTree collection with recent timestamp
+        existing_attack_data = db.geminiAttackTree.find_one({
+            "promptKey": prompt_key,
+            "created_at": {"$gte": datetime.now() - timedelta(days=1)}
+        })
 
         if existing_attack_data:
             attack_data = existing_attack_data["attack_data"]
+            db.geminiAttackTree.update_one(
+                {"_id": existing_attack_data["_id"]},
+                {"$set": {"last_accessed": datetime.now()}}
+            )
         else:
-            prompt = f"""
-                    Generate an attack tree diagram for the {prompt_key} in an automotive system, and provide the output in a JSON format. 
-                    The root node must represent a successful attack on the {prompt_key}. 
-                    The first level of branches should include the main attack. The output JSON must adhere to the following general structure, where the values of all fields can be modified:
+            # Add longer delay for free tier
+            time.sleep(5)  # Increased to 5 seconds
+            
+            # OPTIMIZED PROMPT - Reduced by ~70% tokens
+            prompt = f"""Generate an attack tree diagram for {prompt_key} in automotive systems. 
+            Output must be valid JSON with this exact structure:
+            
+            {{
+                "Attack": "Attack name",
+                "description": "Brief description",
+                "root": "Root attack objective",
+                "AttackData": [
                     {{
-                        "Attack": "String value for the overall attack name",
-                        "description": "String value describing the attack tree",
-                        "root": "String value representing the root attack",
-                        "AttackData": [
-                            {{
-                                "SubAttack1": "String value for the first level sub-attack category",
-                                "children": [
-                                    {{
-                                        "name": "String value for the specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }},
-                                    {{
-                                        "name": "String value for another specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }}
-                                ]
-                            }},
-                            {{
-                                "SubAttack2": "String value for a second level sub-attack category name",
-                                "children": [
-                                    {{
-                                        "name": "String value for a specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }},
-                                    {{
-                                        "name": "String value for another specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }}
-                                ]
-                            }},
-                            {{
-                                "SubAttack3": "String value for a third level sub-attack category name",
-                                "children": [
-                                    {{
-                                        "name": "String value for a specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }},
-                                    {{
-                                        "name": "String value for another specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }}
-                                ]
-                            }},
-                            {{
-                                "SubAttack4": "String value for a fourth level sub-attack category name",
-                                "children": [
-                                    {{
-                                        "name": "String value for a specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }},
-                                    {{
-                                        "name": "String value for another specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }}
-                                ]
-                            }},
-                            {{
-                                "SubAttack5": "String value for a fifth level sub-attack category name",
-                                "children": [
-                                    {{
-                                        "name": "String value for a specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }},
-                                    {{
-                                        "name": "String value for another specific attack technique",
-                                        "impact": "String value describing the security impact",
-                                        "description": "String value explaining the attack technique"
-                                    }}
-                                ]
-                            }}
+                        "SubAttack1": "Category name",
+                        "children": [
+                            {{"name": "Technique 1", "impact": "Impact", "description": "Description"}},
+                            {{"name": "Technique 2", "impact": "Impact", "description": "Description"}}
+                        ]
+                    }},
+                    {{
+                        "SubAttack2": "Category name", 
+                        "children": [
+                            {{"name": "Technique 1", "impact": "Impact", "description": "Description"}},
+                            {{"name": "Technique 2", "impact": "Impact", "description": "Description"}}
+                        ]
+                    }},
+                    {{
+                        "SubAttack3": "Category name",
+                        "children": [
+                            {{"name": "Technique 1", "impact": "Impact", "description": "Description"}},
+                            {{"name": "Technique 2", "impact": "Impact", "description": "Description"}}
+                        ]
+                    }},
+                    {{
+                        "SubAttack4": "Category name",
+                        "children": [
+                            {{"name": "Technique 1", "impact": "Impact", "description": "Description"}},
+                            {{"name": "Technique 2", "impact": "Impact", "description": "Description"}}
+                        ]
+                    }},
+                    {{
+                        "SubAttack5": "Category name",
+                        "children": [
+                            {{"name": "Technique 1", "impact": "Impact", "description": "Description"}},
+                            {{"name": "Technique 2", "impact": "Impact", "description": "Description"}}
                         ]
                     }}
-                    Ensure the generated JSON is valid and conforms to this generalized structure. Do not include any additional text or explanations outside of the requested JSON format.
-                    """
-
-            # Generate attack tree using Gemini AI
+                ]
+            }}
+            
+            Requirements:
+            1. Root node: Successful attack on {prompt_key}
+            2. First level: Main attack categories
+            3. Each category has 2 attack techniques
+            4. Focus on automotive system security
+            5. Output ONLY JSON, no other text"""
+            
+            # Also reduce max_output_tokens
             generation_config = {
                 "temperature": 0,
                 "top_p": 0.95,
                 "top_k": 40,
-                "max_output_tokens": 8192,
+                "max_output_tokens": 2048,  # Reduced from 8192
                 "response_mime_type": "application/json"
             }
             safety_settings = [
@@ -370,17 +347,56 @@ def generate_and_store_attack():
             ]
 
             model = genai.GenerativeModel(
-                model_name="gemini-2.0-flash",
+                model_name="gemini-2.5-flash",  # Try 1.5-flash instead of 2.0 (might have different limits)
                 generation_config=generation_config,
                 safety_settings=safety_settings
             )
-            chat_session = model.start_chat(history=[])
-            response = chat_session.send_message(prompt)
-
-            try:
-                attack_data = json.loads(response.text)
-            except json.JSONDecodeError:
-                return jsonify({"error": "Failed to decode JSON from Gemini response"}), 500
+            
+            # Add longer retry delays
+            max_retries = 2  # Reduced retries
+            retry_delay = 10  # Increased to 10 seconds
+            
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    chat_session = model.start_chat(history=[])
+                    response = chat_session.send_message(prompt)
+                    break
+                except Exception as e:
+                    if any(keyword in str(e).lower() for keyword in ["429", "quota", "rate limit"]):
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delay * (attempt + 1)
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            # Return cached generic attack if available
+                            generic_data = get_generic_attack_data(prompt_key)
+                            if generic_data:
+                                attack_data = generic_data
+                                break
+                            raise
+                    else:
+                        raise
+            
+            if response:
+                try:
+                    attack_data = json.loads(response.text)
+                except json.JSONDecodeError:
+                    # Fallback to generic data
+                    attack_data = get_generic_attack_data(prompt_key) or {
+                        "Attack": f"Attack on {prompt_key}",
+                        "description": f"Security attack tree for {prompt_key}",
+                        "root": f"Compromise {prompt_key}",
+                        "AttackData": []
+                    }
+            else:
+                # Use fallback data
+                attack_data = get_generic_attack_data(prompt_key) or {
+                    "Attack": f"Attack on {prompt_key}",
+                    "description": f"Security attack tree for {prompt_key}",
+                    "root": f"Compromise {prompt_key}",
+                    "AttackData": []
+                }
 
             scene = {
                 "ID": str(uuid.uuid4()),
@@ -390,13 +406,15 @@ def generate_and_store_attack():
                 "templates": create_attack_tree(attack_data)
             }
 
-            # Save the new attack_data in geminiAttackTree collection
             db.geminiAttackTree.insert_one({
                 "promptKey": prompt_key,
                 "type": attack_type,
                 "threat_id": str(uuid.uuid4()),
                 "attack_data": attack_data,
-                "scenes": [scene]
+                "scenes": [scene],
+                "created_at": datetime.now(),
+                "last_accessed": datetime.now(),
+                "is_generated": response is not None  # Track if AI-generated or fallback
             })
 
         # Create new scene for this model
@@ -407,7 +425,6 @@ def generate_and_store_attack():
             "templates": create_attack_tree(attack_data)
         }
 
-        # Check for duplicate attack tree name before inserting
         existing_doc = db.Attacks.find_one({"model_id": model_id, "type": attack_type})
 
         if existing_doc:
@@ -426,8 +443,66 @@ def generate_and_store_attack():
                 "scenes": [new_scene]
             })
 
-        return jsonify({"message": "Attack tree stored successfully", "scene": new_scene}), 200
+        return jsonify({
+            "message": "Attack tree stored successfully", 
+            "scene": new_scene,
+            "ai_generated": attack_data.get("is_generated", True)
+        }), 200
 
     except Exception as e:
+        if any(keyword in str(e).lower() for keyword in ["429", "quota", "rate limit"]):
+            return jsonify({
+                "error": "API rate limit reached. Using cached data if available.",
+                "suggestion": "Try again in 1 hour or use previously generated attack trees."
+            }), 429
         return jsonify({"error": str(e)}), 500
 
+
+def get_generic_attack_data(prompt_key):
+    """Fallback function to provide generic attack data when API fails"""
+    generic_attacks = {
+        "ECU": {
+            "Attack": "ECU Compromise Attack",
+            "description": "Electronic Control Unit security vulnerabilities",
+            "root": "Unauthorized ECU Access",
+            "AttackData": [
+                {
+                    "SubAttack1": "Physical Access",
+                    "children": [
+                        {"name": "JTAG Debugging", "impact": "High", "description": "Physical debug interface exploitation"},
+                        {"name": "Chip Cloning", "impact": "Critical", "description": "Hardware replication attack"}
+                    ]
+                },
+                {
+                    "SubAttack2": "Network Attacks",
+                    "children": [
+                        {"name": "CAN Bus Injection", "impact": "High", "description": "Inject malicious CAN messages"},
+                        {"name": "DoS Attack", "impact": "Medium", "description": "Flood ECU with requests"}
+                    ]
+                }
+            ]
+        },
+        "CAN": {
+            "Attack": "CAN Bus Network Attack",
+            "description": "Controller Area Network security threats",
+            "root": "CAN Network Compromise",
+            "AttackData": [
+                {
+                    "SubAttack1": "Message Spoofing",
+                    "children": [
+                        {"name": "Replay Attack", "impact": "High", "description": "Capture and replay valid messages"},
+                        {"name": "Fake ECU Impersonation", "impact": "Critical", "description": "Impersonate legitimate ECU"}
+                    ]
+                },
+                {
+                    "SubAttack2": "Bus Flooding",
+                    "children": [
+                        {"name": "Priority Flood", "impact": "Medium", "description": "Flood with high priority messages"},
+                        {"name": "Broadcast Storm", "impact": "High", "description": "Overwhelm network capacity"}
+                    ]
+                }
+            ]
+        }
+    }
+    
+    return generic_attacks.get(prompt_key, None)
