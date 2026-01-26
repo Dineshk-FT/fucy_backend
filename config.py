@@ -13,5 +13,4 @@ class Config:
     MAIL_DEFAULT_SENDER = 'dinesh.ravi.kumar115@gmail.com'
     
     # API Keys (Note: Consider moving these to environment variables)
-
     AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net"
