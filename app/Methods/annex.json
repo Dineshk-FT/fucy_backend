@@ -1,0 +1,113 @@
+{
+  "annex_id": "F",
+  "annex_title": "Guidelines for Impact Rating",
+  "sections": [
+    {
+      "section_id": "F.1",
+      "section_title": "General",
+      "content": [
+        "This annex provides example criteria for impact rating (see 15.5) for damage scenarios involving safety, financial, operational, and privacy impacts.",
+        "Tables F.1 through F.4 provide example rating criteria for each impact category.",
+        "Scalability of damage (impact to multiple road users in a single scenario) is not included here but can be added in organization-specific rating criteria."
+      ]
+    },
+    {
+      "section_id": "F.2",
+      "section_title": "Impact Rating for Safety Damage",
+      "tables": [
+        {
+          "table_id": "F.1",
+          "table_title": "Example Safety Impact Rating Criteria",
+          "columns": ["Impact Rating", "Criteria for Safety Impact Rating"],
+          "rows": [
+            { "Impact Rating": "Severe (S3)", "Criteria for Safety Impact Rating": "Life-threatening injuries (survival uncertain) or fatal injuries." },
+            { "Impact Rating": "Major (S2)", "Criteria for Safety Impact Rating": "Severe and life-threatening injuries (survival probable)." },
+            { "Impact Rating": "Moderate (S1)", "Criteria for Safety Impact Rating": "Light and moderate injuries." },
+            { "Impact Rating": "Negligible (S0)", "Criteria for Safety Impact Rating": "No injuries." }
+          ]
+        }
+      ],
+      "notes": [
+        "Controllability and exposure from ISO 26262-3:2018 can also be considered for rating safety impact, provided a rationale is documented."
+      ]
+    },
+    {
+      "section_id": "F.3",
+      "section_title": "Impact Rating for Financial Damage",
+      "tables": [
+        {
+          "table_id": "F.2",
+          "table_title": "Example Financial Impact Rating Criteria",
+          "columns": ["Impact Rating", "Criteria for Financial Impact Rating"],
+          "rows": [
+            { "Impact Rating": "Severe", "Criteria for Financial Impact Rating": "Catastrophic consequences that the affected road user might not overcome." },
+            { "Impact Rating": "Major", "Criteria for Financial Impact Rating": "Substantial consequences that the affected road user can overcome." },
+            { "Impact Rating": "Moderate", "Criteria for Financial Impact Rating": "Inconvenient consequences that can be overcome with limited resources." },
+            { "Impact Rating": "Negligible", "Criteria for Financial Impact Rating": "No effect, negligible consequence, or irrelevant to the road user." }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "F.4",
+      "section_title": "Impact Rating for Operational Damage",
+      "tables": [
+        {
+          "table_id": "F.3",
+          "table_title": "Example Operational Impact Rating Criteria",
+          "columns": ["Impact Rating", "Criteria for Operational Impact Rating"],
+          "rows": [
+            {
+              "Impact Rating": "Severe",
+              "Criteria for Operational Impact Rating": "Loss or impairment of a core vehicle function. Example: vehicle not working, or critical functions misbehaving (e.g., unintended limp-home mode or autonomous driving to an unintended location)."
+            },
+            {
+              "Impact Rating": "Major",
+              "Criteria for Operational Impact Rating": "Loss or impairment of an important vehicle function. Example: significant annoyance to the driver."
+            },
+            {
+              "Impact Rating": "Moderate",
+              "Criteria for Operational Impact Rating": "Partial degradation of a vehicle function. Example: user satisfaction negatively affected."
+            },
+            {
+              "Impact Rating": "Negligible",
+              "Criteria for Operational Impact Rating": "No impairment or non-perceivable impairment of a vehicle function."
+            }
+          ]
+        }
+      ],
+      "notes": [
+        "Operational damage may or may not have associated safety consequences."
+      ]
+    },
+    {
+      "section_id": "F.5",
+      "section_title": "Impact Rating for Privacy Damage",
+      "tables": [
+        {
+          "table_id": "F.4",
+          "table_title": "Example Privacy Impact Rating Criteria",
+          "columns": ["Impact Rating", "Criteria for Privacy Impact Rating"],
+          "rows": [
+            {
+              "Impact Rating": "Severe",
+              "Criteria for Privacy Impact Rating": "Significant or irreversible impact to the road user. Information is highly sensitive and easily linkable to a PII principal."
+            },
+            {
+              "Impact Rating": "Major",
+              "Criteria for Privacy Impact Rating": "Serious impact to the road user. Information is either (a) highly sensitive but difficult to link to a PII principal, or (b) sensitive and easily linkable."
+            },
+            {
+              "Impact Rating": "Moderate",
+              "Criteria for Privacy Impact Rating": "Inconvenient consequences. Information is either (a) sensitive but difficult to link, or (b) not sensitive but easy to link to a PII principal."
+            },
+            {
+              "Impact Rating": "Negligible",
+              "Criteria for Privacy Impact Rating": "No effect or negligible consequence. Information is not sensitive and difficult to link to a PII principal."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

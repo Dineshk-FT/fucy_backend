@@ -1,0 +1,442 @@
+{
+  "clause_id": "15",
+  "clause_title": "Threat Analysis and Risk Assessment (TARA) Methods",
+  "sections": [
+    {
+      "section_id": "15.1",
+      "section_title": "General",
+      "content": [
+        "This clause describes methods to determine the extent to which a road user can be impacted by a threat scenario.",
+        "These methods collectively form a Threat Analysis and Risk Assessment (TARA) performed from the viewpoint of affected road users.",
+        "The TARA process consists of the following modules:",
+        "— asset identification (15.3);",
+        "— threat scenario identification (15.4);",
+        "— impact rating (15.5);",
+        "— attack path analysis (15.6);",
+        "— attack feasibility rating (15.7);",
+        "— risk value determination (15.8); and",
+        "— risk treatment decision (15.9).",
+        "Organization-specific scales for impact rating, attack feasibility rating, and risk value determination can be applied and mapped to the scales defined in this document."
+      ]
+    },
+    {
+      "section_id": "15.2",
+      "section_title": "Objectives",
+      "content": [
+        "The objectives of this clause are to:",
+        "a) identify assets, their cybersecurity properties, and associated damage scenarios;",
+        "b) identify threat scenarios;",
+        "c) determine the impact rating of damage scenarios;",
+        "d) identify attack paths that realize threat scenarios;",
+        "e) determine the ease with which attack paths can be exploited;",
+        "f) determine risk values of threat scenarios; and",
+        "g) select appropriate risk treatment options for threat scenarios."
+      ]
+    },
+    {
+      "section_id": "15.3",
+      "section_title": "Asset Identification",
+      "subsections": [
+        {
+          "subsection_id": "15.3.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.3.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": ["Item definition [WP-09-01] shall be available."]
+            },
+            {
+              "subsubsection_id": "15.3.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": ["Cybersecurity specifications [WP-10-01] can be considered."]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.3.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-01",
+              "description": ["Damage scenarios shall be identified."]
+            },
+            {
+              "id": "RQ-15-02",
+              "description": [
+                "Assets with cybersecurity properties whose compromise leads to a damage scenario shall be identified."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.3.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-01",
+              "description": "Damage scenarios, resulting from RQ-15-01."
+            },
+            {
+              "id": "WP-15-02",
+              "description": "Assets with cybersecurity properties, resulting from RQ-15-02."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.4",
+      "section_title": "Threat Scenario Identification",
+      "subsections": [
+        {
+          "subsection_id": "15.4.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.4.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": ["Item definition [WP-09-01] shall be available."]
+            },
+            {
+              "subsubsection_id": "15.4.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": [
+                "Cybersecurity specifications [WP-10-01];",
+                "Damage scenarios [WP-15-01];",
+                "Assets with cybersecurity properties [WP-15-02]."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.4.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-03",
+              "description": [
+                "Threat scenarios shall be identified and include:",
+                "— targeted asset;",
+                "— compromised cybersecurity property of the asset; and",
+                "— cause of compromise of that property."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.4.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-03",
+              "description": "Threat scenarios, resulting from RQ-15-03."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.5",
+      "section_title": "Impact Rating",
+      "subsections": [
+        {
+          "subsection_id": "15.5.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.5.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": ["Damage scenarios [WP-15-01] shall be available."]
+            },
+            {
+              "subsubsection_id": "15.5.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": [
+                "Item definition [WP-09-01];",
+                "Assets with cybersecurity properties [WP-15-02]."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.5.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-04",
+              "description": [
+                "Damage scenarios shall be assessed against potential adverse consequences for road users in the impact categories of safety, financial, operational, and privacy."
+              ]
+            },
+            {
+              "id": "RQ-15-05",
+              "description": [
+                "The impact rating of a damage scenario shall be determined for each category as one of the following: severe, major, moderate, or negligible."
+              ]
+            }
+          ],
+          "recommendations": [
+            {
+              "id": "PM-15-07",
+              "description": [
+                "If a damage scenario results in an impact rating and it can be argued that all other impact categories are less critical, further analysis for those categories may be omitted."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.5.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-04",
+              "description": "Impact ratings with associated impact categories, resulting from RQ-15-04 to RQ-15-06."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.6",
+      "section_title": "Attack Path Analysis",
+      "subsections": [
+        {
+          "subsection_id": "15.6.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.6.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": [
+                "Item definition [WP-09-01] or cybersecurity specifications [WP-10-01];",
+                "Threat scenarios [WP-15-03]."
+              ]
+            },
+            {
+              "subsubsection_id": "15.6.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": [
+                "Weaknesses from cybersecurity events [WP-08-04];",
+                "Weaknesses found during product development [WP-10-05];",
+                "Architectural design;",
+                "Previously identified attack paths [WP-15-05], if available;",
+                "Vulnerability analysis [WP-08-05]."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.6.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-08",
+              "description": [
+                "Threat scenarios shall be analyzed to identify attack paths."
+              ]
+            },
+            {
+              "id": "RQ-15-09",
+              "description": [
+                "An attack path shall be associated with the threat scenarios that it can realize."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.6.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-05",
+              "description": "Attack paths, resulting from RQ-15-08 and RQ-15-09."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.7",
+      "section_title": "Attack Feasibility Rating",
+      "subsections": [
+        {
+          "subsection_id": "15.7.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.7.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": ["Attack paths [WP-15-05] shall be available."]
+            },
+            {
+              "subsubsection_id": "15.7.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": ["Architectural design;", "Vulnerability analysis [WP-08-05]."]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.7.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-10",
+              "description": [
+                "For each attack path, the attack feasibility rating shall be determined as High, Medium, Low, or Very Low based on the effort required to accomplish the attack path."
+              ]
+            }
+          ],
+          "recommendations": [
+            {
+              "id": "RC-15-11",
+              "description": [
+                "The attack feasibility rating method should be defined using one of the following approaches: attack potential-based, CVSS-based, or attack vector-based."
+              ]
+            },
+            {
+              "id": "RC-15-12",
+              "description": [
+                "If an attack potential-based approach is used, feasibility should be determined based on elapsed time, expertise, knowledge, window of opportunity, and equipment."
+              ]
+            },
+            {
+              "id": "RC-15-13",
+              "description": [
+                "If a CVSS-based approach is used, feasibility should be based on exploitability metrics: attack vector, attack complexity, privileges required, and user interaction."
+              ]
+            },
+            {
+              "id": "RC-15-14",
+              "description": [
+                "If an attack vector-based approach is used, feasibility should be determined by evaluating the predominant attack vector of the attack path."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.7.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-06",
+              "description": "Attack feasibility ratings, resulting from RQ-15-10."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.8",
+      "section_title": "Risk Value Determination",
+      "subsections": [
+        {
+          "subsection_id": "15.8.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.8.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": [
+                "Threat scenarios [WP-15-03];",
+                "Impact ratings [WP-15-04];",
+                "Attack feasibility ratings [WP-15-06]."
+              ]
+            },
+            {
+              "subsubsection_id": "15.8.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": ["None."]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.8.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-15",
+              "description": [
+                "For each threat scenario, the risk value shall be determined from the impact of associated damage scenarios and the attack feasibility of associated attack paths."
+              ]
+            },
+            {
+              "id": "RQ-15-16",
+              "description": [
+                "The risk value shall be between 1 and 5, where 1 represents minimal risk."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.8.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-07",
+              "description": "Risk values, resulting from RQ-15-15 and RQ-15-16."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "section_id": "15.9",
+      "section_title": "Risk Treatment Decision",
+      "subsections": [
+        {
+          "subsection_id": "15.9.1",
+          "subsection_title": "Inputs",
+          "subsubsections": [
+            {
+              "subsubsection_id": "15.9.1.1",
+              "subsubsection_title": "Prerequisites",
+              "content": [
+                "Item definition [WP-09-01];",
+                "Threat scenarios [WP-15-03];",
+                "Risk values [WP-15-07]."
+              ]
+            },
+            {
+              "subsubsection_id": "15.9.1.2",
+              "subsubsection_title": "Further Supporting Information",
+              "content": [
+                "Cybersecurity specifications [WP-10-01];",
+                "Previous risk treatment decisions of the item or similar items;",
+                "Impact ratings [WP-15-04];",
+                "Attack paths [WP-15-05];",
+                "Attack feasibility ratings [WP-15-06]."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.9.2",
+          "subsection_title": "Requirements and Recommendations",
+          "requirements": [
+            {
+              "id": "RQ-15-17",
+              "description": [
+                "For each threat scenario, considering its risk values, one or more of the following risk treatment options shall be determined:",
+                "a) avoiding the risk;",
+                "b) reducing the risk;",
+                "c) sharing the risk; or",
+                "d) retaining the risk."
+              ]
+            }
+          ]
+        },
+        {
+          "subsection_id": "15.9.3",
+          "subsection_title": "Work Products",
+          "work_products": [
+            {
+              "id": "WP-15-08",
+              "description": "Risk treatment decisions, resulting from RQ-15-17."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
