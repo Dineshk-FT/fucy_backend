@@ -132,4 +132,8 @@ def create_app():
     
     app.register_blueprint(modelprompt)
 
+    from app.v1.RAG_Damage_scene import rag_damage_scene as rag_damage_scene
+    
+    app.register_blueprint(rag_damage_scene)
+
     return app

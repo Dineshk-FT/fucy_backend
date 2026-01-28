@@ -8,6 +8,7 @@ from app.v1.RAG_Damage_scene import damage_pipeline
 from db import db
 from flask import Blueprint
 from bson.json_util import dumps
+import traceback
 
 # from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 
@@ -462,58 +463,54 @@ def delete_damage_scenario():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
-# Remove the Flask app setup and __all__ export since you already have them
-# Just add the generate_damage_scenarios function to your existing app.py
 
 def generate_damage_scenarios():
     """
-    Generate ISO/SAE 21434 compliant damage scenarios for an automotive item.
-    
-    Expected JSON request:
-    {
-        "item": "Electronic Brake Control Module"
-    }
-    
-    Returns JSON response:
-    {
-        "item": "Electronic Brake Control Module",
-        "damage_scenarios": "Markdown formatted damage scenarios"
-    }
+    Accepts BOTH JSON and multipart/form-data safely.
+    NEVER throws 400/415 from Werkzeug.
     """
-    # Get JSON data from request
-    data = request.get_json()
-    
+
+    data = None
+
+    # 1️⃣ Try JSON ONLY if content-type is JSON
+    if request.content_type and "application/json" in request.content_type:
+        data = request.get_json(silent=True)
+
+    # 2️⃣ Fallback to form-data
     if not data:
-        return jsonify({"error": "Request body must be JSON"}), 400
-    
+        data = request.form.to_dict()
+
+
+    # 3️⃣ Final guard
+    if not data:
+        return jsonify({"error": "Request body is empty"}), 400
+
     item = data.get("item")
-    
+
     if not item:
         return jsonify({"error": "item is required"}), 400
 
     try:
-        # Run the pipeline
         result = damage_pipeline.run({
-            "text_embedder": {"text": item},
-            "prompt_builder": {"question": item}
-        })
-
-        # Extract the generated scenarios
+        "text_embedder": {
+            "text": item.strip()
+        },
+        "prompt_builder": {
+            "question": item.strip(),
+        }
+})
         output = result["llm"]["replies"][0]
 
         return jsonify({
-            "item": item,
+            "item": item.strip(),
             "damage_scenarios": output
-        })
-        
-    except KeyError as e:
-        app.logger.error(f"Pipeline result structure error: {str(e)}")
-        return jsonify({"error": f"Pipeline result structure error: {str(e)}"}), 500
+        }), 200
+
     except Exception as e:
-        app.logger.error(f"Internal server error: {str(e)}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 
 
 # Then in your existing app.py, register this route:
