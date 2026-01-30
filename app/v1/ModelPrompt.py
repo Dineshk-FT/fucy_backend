@@ -1,6 +1,4 @@
 from flask import Blueprint, request, jsonify, current_app
-import google.generativeai as genai
-import os
 import ast
 import json
 import re
@@ -8,7 +6,9 @@ from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
 from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions,threat_type,safe_json_parse
+from app.v1.gemini import GeminiClient
 import random
+import os
 import uuid
 import string
 from collections import defaultdict
@@ -26,10 +26,7 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+gemini_client = GeminiClient(os.getenv("GOOGLE_API_KEY"), os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 
 #1- Prompt template for label creation (inputs for the model)
@@ -73,8 +70,8 @@ def get_system_inputs():
 
     try:
         prompt = build_prompt(system_name, user_prompt)
-        response = model.generate_content(prompt)
-        content = response.text.strip()
+        response = gemini_client.generate_content(prompt)
+        content = gemini_client.get_text(response).strip()
 
         inputs = safe_json_parse(content)
         if not inputs:
@@ -199,8 +196,8 @@ def generate_reactflow_template(standalone=False, request_data=None):
             """
 
         # Call Gemini
-        response = model.generate_content(prompt)
-        output = response.text.strip()
+        response = gemini_client.generate_content(prompt)
+        output = gemini_client.get_text(response).strip()
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
 
         # Parse JSON
@@ -376,8 +373,8 @@ def create_damage_scenarios(standalone=False, request_data=None):
 
         print("DEBUG: Final Prompt Sent to Model:\n", prompt)
 
-        response = model.generate_content(prompt)
-        raw_output = response.text.strip()
+        response = gemini_client.generate_content(prompt)
+        raw_output = gemini_client.get_text(response).strip()
         print("DEBUG: Raw AI Output:", raw_output)
 
         cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
@@ -557,13 +554,9 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
     """
 
     # Call Gemini
-    gemini_response = model.generate_content(prompt)
+    gemini_response = gemini_client.generate_content(prompt)
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
 
         # Extract only the JSON part
         cleaned = extract_json_from_text(content_text)
@@ -874,14 +867,10 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
     # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
         cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
         return json.loads(cleaned)
     except Exception as e:
@@ -1049,14 +1038,10 @@ def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_promp
     # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
         cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
         return json.loads(cleaned)
     except Exception as e:
@@ -1157,14 +1142,10 @@ def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None)
     # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
 
         # Extract JSON array in case Gemini adds explanation
         match = re.search(r"\[\s*\{.*\}\s*\]", content_text, re.DOTALL)
@@ -1354,12 +1335,8 @@ def generate_cybersecurity_artifact_with_gemini(artifact_type, system_name):
         raise ValueError(f"Unknown artifact type: {artifact_type}")
 
     prompt = prompt_templates[artifact_type].format(system_name=system_name)
-    gemini_response = model.generate_content(prompt)
-    content_text = (
-        gemini_response.text
-        if hasattr(gemini_response, 'text')
-        else gemini_response.candidates[0].content.parts[0].text
-    )
+    gemini_response = gemini_client.generate_content(prompt)
+    content_text = gemini_client.get_text(gemini_response)
     # print(f"Gemini Output for {artifact_type}:", content_text)  # Debug log
     cleaned = re.sub(r"[a-z]*", "", content_text).strip().strip("`")
     cleaned = extract_json_block(cleaned)
@@ -1420,12 +1397,8 @@ def generate_cybersecurity_artifacts():
         # Use user prompt if provided, otherwise fallback to default
         final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-        gemini_response = model.generate_content(final_prompt)
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        gemini_response = gemini_client.generate_content(final_prompt)
+        content_text = gemini_client.get_text(gemini_response)
 
         cleaned = content_text.strip().strip("`").strip("json").strip()
         cleaned = extract_json_block(cleaned)
