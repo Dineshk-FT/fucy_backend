@@ -1,3 +1,4 @@
+from db import db
 from reportlab.platypus import Image
 import io
 from PIL import Image as PILImage
@@ -14,6 +15,7 @@ import uuid
 import json
 import re
 import math
+from bs4 import BeautifulSoup
 
 def get_highest_impact(impacts):
     # impact_order = ["Severe", "Major", "Moderate", "Minor", "Negligible"]
@@ -625,46 +627,202 @@ def html_to_reportlab(html: str) -> str:
     if not html:
         return ""
 
-    text = html.strip()
+    soup = BeautifulSoup(html, "html.parser")
 
-    # paragraphs
-    text = re.sub(r'</p\s*>', '<br/><br/>', text, flags=re.I)
-    text = re.sub(r'<p[^>]*>', '', text, flags=re.I)
+    def walk(node):
+        output = ""
 
-    # bold / italic
-    text = re.sub(r'<\s*strong\s*>', '<b>', text, flags=re.I)
-    text = re.sub(r'<\s*/\s*strong\s*>', '</b>', text, flags=re.I)
-    text = re.sub(r'<\s*em\s*>', '<i>', text, flags=re.I)
-    text = re.sub(r'<\s*/\s*em\s*>', '</i>', text, flags=re.I)
+        for el in node.children:
+            if isinstance(el, str):
+                output += el
+                continue
 
-    # underline
-    text = re.sub(r'<\s*u\s*>', '<u>', text, flags=re.I)
-    text = re.sub(r'<\s*/\s*u\s*>', '</u>', text, flags=re.I)
+            tag = el.name.lower()
 
-    # color span → font
-    def rgb_to_hex(match):
-        r, g, b = map(int, match.groups())
-        return f'<font color="#{r:02x}{g:02x}{b:02x}">'
+            # --- inline formatting ---
+            if tag in ["strong", "b"]:
+                output += f"<b>{walk(el)}</b>"
+            elif tag in ["em", "i"]:
+                output += f"<i>{walk(el)}</i>"
+            elif tag == "u":
+                output += f"<u>{walk(el)}</u>"
+            elif tag in ["s", "strike"]:
+                output += f"<strike>{walk(el)}</strike>"
+            elif tag == "sub":
+                output += f"<sub>{walk(el)}</sub>"
+            elif tag == "sup":
+                output += f"<sup>{walk(el)}</sup>"
 
-    text = re.sub(
-        r'<span[^>]*style="[^"]*color:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)[^"]*"[^>]*>',
-        rgb_to_hex,
-        text,
-        flags=re.I
-    )
-    text = re.sub(r'</span\s*>', '</font>', text, flags=re.I)
+            # --- color ---
+            elif tag == "span":
+                style = el.get("style", "")
+                m = re.search(r"color:\s*rgb\((\d+),\s*(\d+),\s*(\d+)\)", style)
+                if m:
+                    r, g, b = map(int, m.groups())
+                    color = f"#{r:02x}{g:02x}{b:02x}"
+                    output += f'<font color="{color}">{walk(el)}</font>'
+                else:
+                    output += walk(el)
 
-    # normalize br
-    text = re.sub(r'<br\s*>', '<br/>', text, flags=re.I)
+            # --- headings ---
+            elif tag in ["h1", "h2", "h3"]:
+                output += f"<b>{walk(el)}</b><br/><br/>"
 
-    # remove unsupported tags (lists, divs, etc.)
-    text = re.sub(
-        r'<(?!/?(b|i|u|font|br)\b)[^>]*>',
-        '',
-        text,
-        flags=re.I
-    )
+            # --- paragraphs ---
+            elif tag == "p":
+                output += f"{walk(el)}<br/><br/>"
 
-    return text
+            # --- line breaks ---
+            elif tag == "br":
+                output += "<br/>"
 
-    
+            # --- lists ---
+            elif tag == "li":
+                output += f"• {walk(el)}<br/>"
+            elif tag in ["ul", "ol"]:
+                output += walk(el) + "<br/>"
+
+            # --- links ---
+            elif tag == "a":
+                output += walk(el)  # or make clickable if needed
+
+            # --- ignore safely ---
+            else:
+                output += walk(el)
+
+        return output
+
+    text = walk(soup)
+
+    # Final cleanup
+    text = re.sub(r'\n+', '<br/>', text)
+    text = re.sub(r'<br/>\s*<br/>+', '<br/><br/>', text)
+
+    return text.strip()
+
+  
+
+def resolve_user_defined_threat(
+    ud_detail, model_id, derived_threat_scenario
+):
+    resolved_threats = []
+
+    for threat in ud_detail.get("threat_ids", []):
+        row_id = threat.get("rowId")
+        node_id = threat.get("nodeId")
+        prop_id = threat.get("propId")
+
+        damage_name = None
+        impacts = {}
+
+        # ------------------------
+        # DAMAGE SCENARIO LOOKUP
+        # ------------------------
+        damage_scenario = db.Damage_scenarios.find_one(
+            {
+                "model_id": model_id,
+                "type": "User-defined",
+                "Details": {"$elemMatch": {"_id": row_id}},
+            }
+        )
+
+        if damage_scenario:
+            damage_detail = next(
+                (
+                    d
+                    for d in damage_scenario.get("Details", [])
+                    if str(d.get("_id")) == str(row_id)
+                ),
+                None,
+            )
+            if damage_detail:
+                damage_name = damage_detail.get("Name")
+                impacts = damage_detail.get("impacts", {})
+
+        # ------------------------
+        # DERIVED THREAT LOOKUP
+        # ------------------------
+        node_name = None
+        prop_name = None
+        prop_key = None
+
+        if derived_threat_scenario:
+            for derived in derived_threat_scenario.get("Details", []):
+                for inner in derived.get("Details", []):
+                    if inner.get("nodeId") != node_id:
+                        continue
+
+                    node_name = inner.get("node")
+
+                    for prop in inner.get("props", []):
+                        if prop.get("id") == prop_id:
+                            prop_name = prop.get("name")
+                            prop_key = prop.get("key")
+                            break
+
+        resolved_threats.append(
+            {
+                "damage_id": row_id,
+                "damage_scene": damage_name,
+                "node_id": node_id,
+                "node_name": node_name,
+                "prop_id": prop_id,
+                "prop_name": prop_name,
+                "prop_key": prop_key,
+                "impacts": impacts,
+            }
+        )
+
+    return resolved_threats
+
+def calculate_average_impacts(threats):
+    """
+    Returns averaged impacts in the SAME format as input impacts.
+    Example:
+    {
+        "Financial Impact": "Major",
+        "Operational Impact": "Severe",
+        ...
+    }
+    """
+
+    IMPACT_SCORE_MAP = {
+        "Negligible": 1,
+        "Minor": 2,
+        "Moderate": 3,
+        "Major": 4,
+        "Severe": 5,
+    }
+
+    REVERSE_MAP = {v: k for k, v in IMPACT_SCORE_MAP.items()}
+
+    impact_buckets = {}
+
+    # Collect scores per impact type
+    for threat in threats or []:
+        impacts = threat.get("impacts", {})
+        for impact_type, rating in impacts.items():
+            if rating not in IMPACT_SCORE_MAP:
+                continue
+
+            impact_buckets.setdefault(impact_type, []).append(
+                IMPACT_SCORE_MAP[rating]
+            )
+
+    if not impact_buckets:
+        return {}
+
+    averaged_impacts = {}
+
+    for impact_type, scores in impact_buckets.items():
+        avg_score = sum(scores) / len(scores)
+
+        # Find nearest rating
+        closest_score = min(
+            REVERSE_MAP.keys(),
+            key=lambda x: abs(x - avg_score)
+        )
+
+        averaged_impacts[impact_type] = REVERSE_MAP[closest_score]
+
+    return averaged_impacts

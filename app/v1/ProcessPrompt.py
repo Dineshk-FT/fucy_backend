@@ -1,4 +1,6 @@
-from flask import Blueprint, request, jsonify,json
+from flask import Blueprint, request, jsonify
+import json
+from json import JSONDecodeError
 import uuid
 from db import db
 import os
@@ -381,14 +383,14 @@ def generate_and_store_attack():
             if response:
                 try:
                     attack_data = json.loads(response.text)
-                except json.JSONDecodeError:
-                    # Fallback to generic data
+                except JSONDecodeError:
                     attack_data = get_generic_attack_data(prompt_key) or {
                         "Attack": f"Attack on {prompt_key}",
                         "description": f"Security attack tree for {prompt_key}",
                         "root": f"Compromise {prompt_key}",
                         "AttackData": []
                     }
+
             else:
                 # Use fallback data
                 attack_data = get_generic_attack_data(prompt_key) or {

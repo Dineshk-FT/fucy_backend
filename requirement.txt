@@ -23,3 +23,4 @@ stripe==12.4.0
 dotenv==0.9.9
 svglib==1.5.1
 six==1.16.0
+beautifulsoup4
