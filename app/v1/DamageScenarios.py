@@ -1,14 +1,18 @@
+import os
 from flask import current_app as app
 from flask import request, jsonify, json, Response
 from flask_cors import cross_origin
 import uuid
 from bson import ObjectId
 from pymongo import ASCENDING
-from app.v1.RAG_Damage_scene import damage_pipeline
+from app.v1.RAG_Damage_scene import  damage_pipeline
 from db import db
 from flask import Blueprint
 from bson.json_util import dumps
 import traceback
+import re
+import json
+from typing import Dict, List, Any
 
 # from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 
@@ -16,6 +20,10 @@ import traceback
 app = Blueprint("dmg_scr", __name__)
 damage_scenarios = db["Damage_scenarios"]
 
+current_file_dir = os.path.dirname(os.path.abspath(__file__))
+app_dir = os.path.dirname(current_file_dir)
+methods_dir = os.path.join(app_dir, "Methods")
+BMS_PATH = os.path.join(methods_dir, "bms.json") 
 # Ensure the index for optimal query performance
 db.Damage_scenarios.create_index(
     [("model_id", ASCENDING), ("status", ASCENDING)], background=True
@@ -465,55 +473,224 @@ def delete_damage_scenario():
         return jsonify({"error": str(e)}), 500
 
 
-def generate_damage_scenarios():
+def parse_damage_scenarios(markdown_text: str) -> List[Dict[str, Any]]:
     """
-    Accepts BOTH JSON and multipart/form-data safely.
-    NEVER throws 400/415 from Werkzeug.
+    Parse markdown-formatted damage scenarios into structured data.
+    
+    Supports both formats:
+    1. Old format: **Safety Impact:** Severe
+    2. New format: **Safety Impact:** S3 - Major (or S3/Major)
     """
+    scenarios = []
+    
+    # Split by scenario headers and capture the headers
+    # Pattern: ## Damage Scenario X followed by content until next ## or end
+    # Enhanced to handle multi-line headers
+    pattern = r'## (Damage Scenario \d+)\s*\n([^#]*)'
+    
+    # Find all matches
+    matches = re.finditer(pattern, markdown_text, re.DOTALL | re.MULTILINE)
+    
+    for match in matches:
+        scenario = {}
+        scenario_name = match.group(1).strip()  # "Damage Scenario 1"
+        content = match.group(2)  # Everything after until next ##
+        
+        scenario['name'] = scenario_name
+        
+        # Extract description - handle both single and multi-line descriptions
+        desc_patterns = [
+            r'\*\*Description:\*\*\s*(.+?)(?=\n\*\*|\Z)',  # Standard format
+            r'\*\*Description:\*\*\s*\n(.+?)(?=\n\*\*|\Z)',  # Multi-line format
+            r'Description:\s*(.+?)(?=\n\*\*|\n##|\Z)'  # Alternative format
+        ]
+        
+        description = None
+        for pattern in desc_patterns:
+            desc_match = re.search(pattern, content, re.DOTALL)
+            if desc_match:
+                description = desc_match.group(1).strip()
+                break
+        
+        if description:
+            scenario['description'] = description
+        
+        # Enhanced impact extraction that handles both formats
+        impact_fields = {
+            'safety_impact': [
+                r'\*\*Safety Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Safety Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Safety.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ],
+            'operational_impact': [
+                r'\*\*Operational Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Operational Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Operational.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ],
+            'financial_impact': [
+                r'\*\*Financial Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Financial Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Financial.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ],
+            'privacy_impact': [
+                r'\*\*Privacy Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Privacy Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Privacy.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ],
+            'regulatory_impact': [
+                r'\*\*Regulatory Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Regulatory Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Regulatory.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ],
+            'overall_impact': [
+                r'\*\*Overall Impact:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+                r'Overall Impact:\s*(.+?)(?=\n\*\*|\n##|\Z)',
+                r'Overall.*?[Ii]mpact:\s*(.+?)(?=\n|$)'
+            ]
+        }
+        
+        for field, patterns in impact_fields.items():
+            impact_value = None
+            for pattern in patterns:
+                field_match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+                if field_match:
+                    impact_value = field_match.group(1).strip()
+                    break
+            
+            if impact_value:
+                # Clean up the impact value
+                scenario[field] = impact_value
+        
+        # Only add scenario if we have at least a description
+        if 'description' in scenario:
+            scenarios.append(scenario)
+    
+    # If no scenarios found with the header pattern, try alternative parsing
+    if not scenarios:
+        # Try to find scenario blocks by looking for numbered scenarios
+        scenario_blocks = re.split(r'(?i)##?\s*(?:Damage\s+)?Scenario\s+\d+', markdown_text)
+        
+        for i, block in enumerate(scenario_blocks[1:], 1):  # Start from 1, skip first
+            scenario = {'name': f'Damage Scenario {i}'}
+            
+            # Try to extract description
+            desc_match = re.search(r'(?i)description[:\*]*\s*(.+?)(?=\n\s*\*\*|\n\s*[A-Z]|\Z)', block, re.DOTALL)
+            if desc_match:
+                scenario['description'] = desc_match.group(1).strip()
+            
+            # Try to extract impacts with more flexible patterns
+            for field, field_name in [
+                ('safety_impact', 'Safety'),
+                ('operational_impact', 'Operational'),
+                ('financial_impact', 'Financial'),
+                ('privacy_impact', 'Privacy'),
+                ('regulatory_impact', 'Regulatory'),
+                ('overall_impact', 'Overall')
+            ]:
+                pattern = rf'(?i){field_name}[^:\n]*[:\*]+\s*(.+?)(?=\n\s*\*\*|\n\s*[A-Z]|\Z)'
+                impact_match = re.search(pattern, block, re.DOTALL)
+                if impact_match:
+                    scenario[field] = impact_match.group(1).strip()
+            
+            if 'description' in scenario:
+                scenarios.append(scenario)
+    
+    # If still no scenarios, try to extract any structured information
+    if not scenarios:
+        # Look for any bullet points or structured content
+        lines = markdown_text.split('\n')
+        current_scenario = {}
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('## Damage Scenario') or line.startswith('## Scenario'):
+                if current_scenario:
+                    scenarios.append(current_scenario)
+                    current_scenario = {}
+                current_scenario['name'] = line.strip('# ')
+            elif ':' in line:
+                parts = line.split(':', 1)
+                if len(parts) == 2:
+                    key = parts[0].strip().lower().replace('**', '')
+                    value = parts[1].strip().replace('**', '')
+                    
+                    if 'description' in key:
+                        current_scenario['description'] = value
+                    elif 'safety' in key:
+                        current_scenario['safety_impact'] = value
+                    elif 'operational' in key:
+                        current_scenario['operational_impact'] = value
+                    elif 'financial' in key:
+                        current_scenario['financial_impact'] = value
+                    elif 'privacy' in key:
+                        current_scenario['privacy_impact'] = value
+                    elif 'regulatory' in key:
+                        current_scenario['regulatory_impact'] = value
+                    elif 'overall' in key:
+                        current_scenario['overall_impact'] = value
+        
+        if current_scenario and 'description' in current_scenario:
+            scenarios.append(current_scenario)
+    
+    return scenarios
 
-    data = None
-
-    # 1️⃣ Try JSON ONLY if content-type is JSON
-    if request.content_type and "application/json" in request.content_type:
-        data = request.get_json(silent=True)
-
-    # 2️⃣ Fallback to form-data
-    if not data:
-        data = request.form.to_dict()
-
-
-    # 3️⃣ Final guard
-    if not data:
-        return jsonify({"error": "Request body is empty"}), 400
-
-    item = data.get("item")
-
-    if not item:
-        return jsonify({"error": "item is required"}), 400
+def generate_damage_scenarios_from_json():
+    """
+    Reads bms.json automatically and generates damage scenarios 
+    for all assets defined in the system.
+    """
+    if not os.path.exists(BMS_PATH):
+        return jsonify({"error": f"bms.json not found at {BMS_PATH}"}), 404
 
     try:
-        result = damage_pipeline.run({
-        "text_embedder": {
-            "text": item.strip()
-        },
-        "prompt_builder": {
-            "question": item.strip(),
-        }
-})
-        output = result["llm"]["replies"][0]
+        # 1. Load the assets from bms.json
+        with open(BMS_PATH, "r", encoding="utf-8") as f:
+            bms_data = json.load(f)
+        
+        # Extract assets from the Details section
+        assets_to_process = bms_data.get("Assets", [{}])[0].get("Details", [])
+        
+        all_results = []
+
+        # 2. Iterate through assets and run the RAG pipeline
+        # Note: In a production environment with many assets, you might want to 
+        # limit this or use a background task to avoid timeouts.
+        for asset in assets_to_process:
+            asset_name = asset.get("name")
+            if not asset_name or asset.get("type") == "group":
+                continue
+
+            # Contextual query for the RAG
+            query_text = f"Damage scenarios for {asset_name} in the Battery Management System"
+            
+            result = damage_pipeline.run({
+                "text_embedder": {
+                    "text": query_text
+                },
+                "prompt_builder": {
+                    "question": asset_name,
+                }
+            })
+            
+            raw_reply = result["llm"]["replies"][0]
+            
+            all_results.append({
+                "asset_name": asset_name,
+                "generated_content": raw_reply
+            })
 
         return jsonify({
-            "item": item.strip(),
-            "damage_scenarios": output
+            "model_id": bms_data["Models"][0]["_id"],
+            "system_name": bms_data["Models"][0]["name"],
+            "results": all_results
         }), 200
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-
-
-# Then in your existing app.py, register this route:
-@app.route("/v1/rag-generate/damage-scenarios", methods=["POST"])
+# Updated Route
+@app.route("/v1/rag-generate/bms-damage-scenarios", methods=["GET", "POST"])
 def damage_scenarios_endpoint():
-    return generate_damage_scenarios()
+    # Now this doesn't require an "item" in the body; it uses the file.
+    return generate_damage_scenarios_from_json()
