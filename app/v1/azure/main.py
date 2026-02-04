@@ -1,9 +1,10 @@
+
 from __future__ import annotations
 
 from typing import Any, Iterable, Optional
-import json
+import json, re
 
-from azure.identity import DefaultAzureCredential
+# from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContainerClient, BlobClient
 
 class AzureBlobClient:
@@ -25,27 +26,20 @@ class AzureBlobClient:
     # --- Credential behavior ---
     allow_interactive_browser: bool = False
 
-    def __post_init__(self) -> None:
-        if not (self.connection_string or self.storage_account_name or self.account_url):
-            raise ValueError(
-                "Provide one of: connection_string, storage_account_name, or account_url."
-            )
-
-        if self.connection_string and (self.storage_account_name or self.account_url):
-            raise ValueError(
-                "Provide either connection_string OR (storage_account_name/account_url), not both."
-            )
-
-    def _build_account_url(self) -> str:
-        if self.account_url:
-            return self.account_url
-        # Default public cloud endpoint; adjust for gov/stack if needed.
-        return f"https://{self.storage_account_name}.blob.core.windows.net"
-
-    def _build_credential(self):
-        if self.allow_interactive_browser:
-            return DefaultAzureCredential(exclude_interactive_browser_credential=False)
-        return DefaultAzureCredential()
+    # def __init__(
+    #     *,
+    #     storage_account_name: Optional[str] = None,
+    #     account_url: Optional[str] = None,
+    #     connection_string: Optional[str] = None,
+    #     allow_interactive_browser: bool = False,
+    # ) -> None:
+    #     self.storage_account_name = storage_account_name
+    #     self.account_url = account_url
+    #     self.connection_string = connection_string
+    #     self.allow_interactive_browser = allow_interactive_browser
+    #     if self.allow_interactive_browser:
+    #         return DefaultAzureCredential(exclude_interactive_browser_credential=False)
+    #     return DefaultAzureCredential()
 
     def service(self) -> BlobServiceClient:
         """Create a BlobServiceClient using either connection string or AAD."""
@@ -57,13 +51,13 @@ class AzureBlobClient:
             credential=self._build_credential(),
         )
 
-    # ---------- Convenience helpers ----------
-
     def container(self, container_name: str) -> ContainerClient:
+        """Create a ContainerClient for a given container."""
         return self.service().get_container_client(container_name)
 
     def blob_client(self, container_name: str, blob_name: str) -> BlobClient:
-        return self.container(container_name).get_blob_client(blob_name)
+        """Create a BlobClient for a given container + blob."""
+        return self.service().get_blob_client(container=container_name, blob=blob_name)
 
     def ensure_container(self, container_name: str) -> None:
         """Create the container if it doesn't exist (idempotent)."""
@@ -99,7 +93,7 @@ class AzureBlobClient:
         raw = bc.download_blob().readall()
         return json.loads(raw)
 
-    def list_json(
+    def list_json(  
         self,
         container_name: str,
         *,
@@ -109,3 +103,17 @@ class AzureBlobClient:
         for b in c.list_blobs(name_starts_with=prefix):
             if b.name.endswith(".json"):
                 yield b.name
+
+def main():
+    blob = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net")
+    rag_container = blob.get_container_client("rag")
+    for b in rag_container.list_blobs(name_starts_with="clause"):
+        name = b.name
+        bc = rag_container.get_blob_client(name)
+        raw = bc.download_blob().readall()
+        clause = json.loads(raw)
+        # number = int(re.search(r'-(\d+)\.json', name).group(1))
+        print(name)
+
+    
+main()
