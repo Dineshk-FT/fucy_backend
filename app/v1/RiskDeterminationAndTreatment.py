@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO)
 
 app = Blueprint("riskDetAndTreat", __name__)
 
-
 def convert_object_id(data):
     """Recursively convert ObjectId to string in a dictionary or list."""
     if isinstance(data, list):
