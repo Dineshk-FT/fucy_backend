@@ -17,6 +17,11 @@ from bson import ObjectId
 import traceback
 from werkzeug.datastructures import MultiDict
 import time
+from app.v1.rag.main import (
+    retrieve_documents,
+    build_rag_context,
+    build_prompt_from_documents,
+)
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -69,7 +74,9 @@ def get_system_inputs():
         return jsonify({"error": "'systemName' is required in form data"}), 400
 
     try:
-        prompt = build_prompt(system_name, user_prompt)
+        # prompt = build_prompt(system_name, user_prompt) # old gemini flow
+        docs = retrieve_documents(user_prompt, top_k=5)
+        prompt = build_prompt_from_documents(user_prompt, documents=docs)
         response = gemini_client.generate_content(prompt)
         content = gemini_client.get_text(response).strip()
 
@@ -196,6 +203,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             """
 
         # Call Gemini
+        
         response = gemini_client.generate_content(prompt)
         output = gemini_client.get_text(response).strip()
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
@@ -554,6 +562,8 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
     """
 
     # Call Gemini
+    docs = retrieve_documents(user_prompt, top_k=5)
+    prompt = build_prompt_from_documents(user_prompt, documents=docs)
     gemini_response = gemini_client.generate_content(prompt)
     try:
         content_text = gemini_client.get_text(gemini_response)
