@@ -56,6 +56,7 @@ def get_risk_treatment():
             matching_goals = []
             matching_claims = []
             catalogs = risk.get("catalogs")
+            risk_treatment_options = risk.get("risk_treatment_options")
 
             damage_scenario = db.Damage_scenarios.find_one(
                 {
@@ -238,6 +239,7 @@ def get_risk_treatment():
                         "cybersecurity_claims": matching_claims,
                     },
                     "catalogs": catalogs if catalogs else [],
+                    "risk_treatment_options": risk_treatment_options if risk_treatment_options else [],
                 }
             )
 
@@ -328,6 +330,9 @@ def update_risk_treatment():
         detail_id = request.form.get("detailId")
         catalogs = request.form.get("catalogs")
         model_id = request.form.get("model-id")
+        
+        # Updated parameter for risk treatment options - can be array or comma-separated string
+        risk_treatment_options = request.form.get("risk_treatment_options")
 
         threat_key = request.form.get("threatKey")
         cyber_details = request.form.get("cyberDetails")  # Comma-separated string
@@ -357,6 +362,49 @@ def update_risk_treatment():
                 )
 
             return jsonify({"message": "Catalogs updated successfully"}), 200
+
+        # Handle `risk_treatment_options` update - MULTI-SELECT SUPPORT
+        elif detail_id and risk_treatment_options is not None:
+            # Parse the risk_treatment_options value
+            try:
+                # Try to parse as JSON array first
+                if risk_treatment_options.startswith('[') and risk_treatment_options.endswith(']'):
+                    risk_treatment_list = json.loads(risk_treatment_options)
+                else:
+                    # Handle as comma-separated string
+                    if risk_treatment_options.strip():
+                        risk_treatment_list = [
+                            item.strip() 
+                            for item in risk_treatment_options.split(",") 
+                            if item.strip()
+                        ]
+                    else:
+                        risk_treatment_list = []
+                
+                # Sort the list for consistency
+                risk_treatment_list.sort()
+                
+            except json.JSONDecodeError:
+                # If it's a single value, convert to list
+                risk_treatment_list = [risk_treatment_options.strip()] if risk_treatment_options.strip() else []
+            
+            query = {"model_id": model_id}
+            update = {"$set": {f"Details.$[detail].risk_treatment_options": risk_treatment_list}}
+            array_filters = [{"detail.id": detail_id}]
+
+            result_risk_treatment_update = db.Risk_treatment.update_one(
+                query, update, array_filters=array_filters
+            )
+
+            if result_risk_treatment_update.matched_count == 0:
+                return (
+                    jsonify(
+                        {"error": "No matching document found for risk treatment options update"}
+                    ),
+                    404,
+                )
+
+            return jsonify({"message": "Risk treatment options updated successfully"}), 200
 
         # Handle `cyber_details`, `threat_key`, and `type` update
         elif cyber_details and threat_key and type:
@@ -427,7 +475,7 @@ def update_risk_treatment():
         return (
             jsonify(
                 {
-                    "error": "Invalid request. Provide either 'detailId' and 'catalogs' or 'cyberDetails', 'threatKey', and 'type'."
+                    "error": "Invalid request. Provide either:\n1. 'detailId' and 'catalogs'\n2. 'detailId' and 'risk_treatment_options'\n3. 'cyberDetails', 'threatKey', and 'type'."
                 }
             ),
             400,
@@ -442,7 +490,6 @@ def update_risk_treatment():
     except Exception as e:
         logging.error(f"Unexpected error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/v1/delete/risktreatment", methods=["DELETE"])
 def delete_risk_treatment():
