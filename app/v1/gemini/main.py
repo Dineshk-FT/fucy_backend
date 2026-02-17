@@ -1,13 +1,14 @@
-import os
 import google.generativeai as genai
 
 
 class GeminiClient:
     def __init__(self, api_key=None, model_name=None):
-        genai.configure(api_key)
-        self.model_name = model_name
-        self.configured = False
-        self.model = genai.GenerativeModel(model_name)
+        genai.configure(api_key=api_key)
+        self.model_name = model_name or "gemini-2.5-flash"
+        self.model = genai.GenerativeModel(self.model_name)
+
+    def get_model(self):
+        return self.model
 
     def generate_content(self, prompt):
         """Generate content for a prompt using Gemini."""

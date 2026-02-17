@@ -6,7 +6,7 @@ from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
 from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions,threat_type,safe_json_parse
-from app.v1.gemini import GeminiClient
+from app.v1.gemini.main import GeminiClient
 import random
 import os
 import uuid

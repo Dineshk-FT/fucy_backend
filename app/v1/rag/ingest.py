@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
-from azure import BlobServiceClient
+from azure.storage.blob import BlobServiceClient
 
 from haystack import Document
 from haystack.document_stores.in_memory import InMemoryDocumentStore
