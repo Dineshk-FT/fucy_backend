@@ -63,6 +63,57 @@ def get_risk_treatment():
             # 🔥 DERIVED (USER-DEFINED) HANDLING
             # ==========================================================
             if is_derived:
+                # Get cybersecurity goals and claims for the parent derived scene
+                matching_goals = []
+                matching_claims = []
+                
+                # Process goals for the parent scene
+                goal_ids_list = []
+                if goal_ids:
+                    if isinstance(goal_ids, list):
+                        goal_ids_list = [
+                            item.strip()
+                            for item in goal_ids
+                            if isinstance(item, str) and item.strip()
+                        ]
+                    elif isinstance(goal_ids, str):
+                        goal_ids_list = [
+                            item.strip() for item in goal_ids.split(",") if item.strip()
+                        ]
+
+                    goals = db.Cybersecurity.find_one(
+                        {"model_id": model_id, "type": "cybersecurity_goals"}
+                    )
+                    if goals:
+                        scenes = goals.get("scenes", [])
+                        matching_goals = [
+                            scene for scene in scenes
+                            if scene.get("ID") in goal_ids_list
+                        ]
+
+                # Process claims for the parent scene
+                claim_ids_list = []
+                if claim_ids:
+                    if isinstance(claim_ids, list):
+                        claim_ids_list = [
+                            item.strip()
+                            for item in claim_ids
+                            if isinstance(item, str) and item.strip()
+                        ]
+                    elif isinstance(claim_ids, str):
+                        claim_ids_list = [
+                            item.strip() for item in claim_ids.split(",") if item.strip()
+                        ]
+
+                    claims = db.Cybersecurity.find_one(
+                        {"model_id": model_id, "type": "cybersecurity_claims"}
+                    )
+                    if claims:
+                        scenes = claims.get("scenes", [])
+                        matching_claims = [
+                            scene for scene in scenes
+                            if scene.get("ID") in claim_ids_list
+                        ]
 
                 user_defined_threat = db.Threat_scenarios.find_one(
                     {"model_id": model_id, "type": "User-defined"}
@@ -77,29 +128,18 @@ def get_risk_treatment():
                             break
 
                 derived_results = []
+                all_cyber_requirements = []  # Store all requirements for average calculation if needed
 
                 for threat_ref in derived_threat_ids:
-
                     single_row_id = threat_ref.get("rowId")
                     single_node_id = threat_ref.get("nodeId")
                     single_prop_id = threat_ref.get("propId")
-                    # print(f"Processing derived threat reference: rowId={single_row_id}, nodeId={single_node_id}, propId={single_prop_id}")
 
-                    matching_goals = []
-                    matching_claims = []
                     attack_scene = None
                     threat_scene = None
                     impacts = {}
 
-                    # -------------------------
                     # DAMAGE SCENARIO
-                    # -------------------------
-                    # doc = db.Damage_scenarios.find_one({
-                    #     "model_id": model_id,
-                    #     "type": "User-defined"})
-                    # # print("doc",doc)
-                    # print("ids",doc["Details"][0]["_id"], type(doc["Details"][0]["_id"]), "single_row_id", single_row_id, type(single_row_id))         
-                    # print("model_id", model_id, "single_row_id", single_row_id)
                     damage_scenario = db.Damage_scenarios.find_one(
                         {
                             "model_id": model_id,
@@ -108,68 +148,12 @@ def get_risk_treatment():
                         }
                     )
 
-                    # print(f"Damage scenario lookup for damage_id={single_row_id}: {'Found' if damage_scenario else 'Not found'}")
-
-                    # -------------------------
-                    # CYBERSECURITY GOALS
-                    # -------------------------
-                    goal_ids_list = []
-                    if goal_ids:
-                        if isinstance(goal_ids, list):
-                            goal_ids_list = [
-                                item.strip()
-                                for item in goal_ids
-                                if isinstance(item, str) and item.strip()
-                            ]
-                        elif isinstance(goal_ids, str):
-                            goal_ids_list = [
-                                item.strip() for item in goal_ids.split(",") if item.strip()
-                            ]
-
-                        goals = db.Cybersecurity.find_one(
-                            {"model_id": model_id, "type": "cybersecurity_goals"}
-                        )
-                        if goals:
-                            scenes = goals.get("scenes", [])
-                            matching_goals = [
-                                scene for scene in scenes
-                                if scene.get("ID") in goal_ids_list
-                            ]
-
-                    # -------------------------
-                    # CYBERSECURITY CLAIMS
-                    # -------------------------
-                    claim_ids_list = []
-                    if claim_ids:
-                        if isinstance(claim_ids, list):
-                            claim_ids_list = [
-                                item.strip()
-                                for item in claim_ids
-                                if isinstance(item, str) and item.strip()
-                            ]
-                        elif isinstance(claim_ids, str):
-                            claim_ids_list = [
-                                item.strip() for item in claim_ids.split(",") if item.strip()
-                            ]
-
-                        claims = db.Cybersecurity.find_one(
-                            {"model_id": model_id, "type": "cybersecurity_claims"}
-                        )
-                        if claims:
-                            scenes = claims.get("scenes", [])
-                            matching_claims = [
-                                scene for scene in scenes
-                                if scene.get("ID") in claim_ids_list
-                            ]
-
-                    # -------------------------
                     # ATTACK TREE
-                    # -------------------------
                     attack_details = db.Attacks.find_one(
                         {
                             "model_id": model_id,
                             "type": "attack_trees",
-                            "scenes.threat_key": threat_key,
+                            "scenes.threat_id": single_prop_id,
                         },
                         {"scenes.$": 1},
                     )
@@ -179,7 +163,7 @@ def get_risk_treatment():
                             (
                                 scene
                                 for scene in attack_details.get("scenes", [])
-                                if scene.get("threat_key") == threat_key
+                                if scene.get("threat_id") == single_prop_id
                             ),
                             None,
                         )
@@ -190,9 +174,7 @@ def get_risk_treatment():
                                 "overall_rating": matched_scene.get("overall_rating"),
                             }
 
-                    # -------------------------
                     # DERIVED THREAT LOOKUP
-                    # -------------------------
                     threat_scenario = db.Threat_scenarios.find_one(
                         {"model_id": model_id, "type": "derived"}
                     )
@@ -237,57 +219,84 @@ def get_risk_treatment():
 
                                         impacts = damage_detail.get("impacts")
 
-                    # -------------------------
-                    # CYBER REQUIREMENTS
-                    # -------------------------
-                    cyber_requirements = db.Cybersecurity.find(
+                    # ⚠️ UPDATED: CYBER REQUIREMENTS - Fetch using both threat_id and threat_key
+                    cyber_requirements_scenes = []
+                    
+                    # Try to fetch requirements using threat_id
+                    cyber_requirements_by_id = db.Cybersecurity.find(
                         {
                             "model_id": model_id,
                             "type": "cybersecurity_requirements",
-                            "scenes.threat_key": threat_key,
+                            "scenes.threat_id": single_prop_id,
                         },
                         {"scenes": 1, "_id": 0},
                     )
 
-                    cyber_requirements_scenes = [
-                        scene
-                        for item in cyber_requirements
-                        for scene in item.get("scenes", [])
-                        if scene.get("threat_key") == threat_key
-                    ]
+                    for item in cyber_requirements_by_id:
+                        for scene in item.get("scenes", []):
+                            if scene.get("threat_id") == single_prop_id:
+                                cyber_requirements_scenes.append(scene)
+                                all_cyber_requirements.append(scene)
+
+                    # Also try to fetch requirements using threat_key if available
+                    if threat_scene and threat_scene.get("threat_key"):
+                        cyber_requirements_by_key = db.Cybersecurity.find(
+                            {
+                                "model_id": model_id,
+                                "type": "cybersecurity_requirements",
+                                "scenes.threat_key": threat_scene.get("threat_key"),
+                            },
+                            {"scenes": 1, "_id": 0},
+                        )
+
+                        for item in cyber_requirements_by_key:
+                            for scene in item.get("scenes", []):
+                                if scene.get("threat_key") == threat_scene.get("threat_key"):
+                                    # Avoid duplicates
+                                    if scene not in cyber_requirements_scenes:
+                                        cyber_requirements_scenes.append(scene)
+                                        all_cyber_requirements.append(scene)
 
                     derived_results.append(
                         {
                             "threat_id": single_prop_id,
+                            "threat_key": threat_scene.get("threat_key") if threat_scene else None,
                             "node_id": single_node_id,
                             "threat_scene": threat_scene,
                             "attack_scene": attack_scene,
                             "impacts": impacts,
                             "cybersecurity": {
                                 "cybersecurity_requirements": cyber_requirements_scenes,
-                                "cybersecurity_goals": matching_goals,
-                                "cybersecurity_claims": matching_claims,
+                                # Goals and claims removed from individual threats
                             },
                         }
                     )
+                
                 average_impacts = calculate_average_impacts(derived_results)
                 results.append(
                     {
                         "id": id,
                         "threat_id": threat_id,
+                        "threat_key": threat_key,
                         "label": label,
-                        "impacts": average_impacts,  # <-- OUTSIDE derived_threats
+                        "impacts": average_impacts,
                         "isDerived": True,
                         "derived_threats": derived_results,
                         "catalogs": catalogs if catalogs else [],
                         "risk_treatment_options": risk_treatment_options if risk_treatment_options else [],
+                        "cybersecurity": {
+                            "cybersecurity_goals": matching_goals,
+                            "cybersecurity_claims": matching_claims,
+                            "cybersecurity_requirements": all_cyber_requirements,  # Add combined requirements at parent level if needed
+                        },
                     }
                 )
 
                 continue
 
+
             # ==========================================================
-            # 🟢 ORIGINAL SINGLE THREAT FLOW (UNCHANGED)
+            # 🟢 ORIGINAL SINGLE THREAT FLOW (UPDATED)
             # ==========================================================
 
             matching_goals = []
@@ -414,6 +423,42 @@ def get_risk_treatment():
 
                             impacts = damage_detail.get("impacts")
 
+            # ⚠️ UPDATED: Fetch cybersecurity requirements for single threat using both threat_id and threat_key
+            cyber_requirements_scenes = []
+
+            # Try to fetch requirements using threat_id
+            cyber_requirements_by_id = db.Cybersecurity.find(
+                {
+                    "model_id": model_id,
+                    "type": "cybersecurity_requirements",
+                    "scenes.threat_id": threat_id,
+                },
+                {"scenes": 1, "_id": 0},
+            )
+
+            for item in cyber_requirements_by_id:
+                for scene in item.get("scenes", []):
+                    if scene.get("threat_id") == threat_id:
+                        cyber_requirements_scenes.append(scene)
+
+            # Also try to fetch requirements using threat_key
+            if threat_key:
+                cyber_requirements_by_key = db.Cybersecurity.find(
+                    {
+                        "model_id": model_id,
+                        "type": "cybersecurity_requirements",
+                        "scenes.threat_key": threat_key,
+                    },
+                    {"scenes": 1, "_id": 0},
+                )
+
+                for item in cyber_requirements_by_key:
+                    for scene in item.get("scenes", []):
+                        if scene.get("threat_key") == threat_key:
+                            # Avoid duplicates
+                            if scene not in cyber_requirements_scenes:
+                                cyber_requirements_scenes.append(scene)
+
             results.append(
                 {
                     "id": id,
@@ -425,7 +470,7 @@ def get_risk_treatment():
                     "attack_scene": attack_scene,
                     "impacts": impacts,
                     "cybersecurity": {
-                        "cybersecurity_requirements": [],
+                        "cybersecurity_requirements": cyber_requirements_scenes,  # Updated
                         "cybersecurity_goals": matching_goals,
                         "cybersecurity_claims": matching_claims,
                     },
@@ -453,7 +498,8 @@ def add_risk_treatment():
         damage_id = request.form.get("damageId")
         threat_key = request.form.get("key")
         isDerived = request.form.get("isDerived", "false")
-
+        
+        print(f"Received parameters - nodeId: {node_id}, threatId: {threat_id}, modelId: {model_id}, label: {label}, damageId: {damage_id}, key: {threat_key}, isDerived: {isDerived}")
         if not (node_id and threat_id and model_id):
             return jsonify({"error": "Missing nodeId, threatId, or modelId"}), 400
 
