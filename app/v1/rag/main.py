@@ -43,12 +43,17 @@ class RagResources:
 
 def init_rag_resources(paths: IngestPaths | None = None) -> RagResources:
     store = create_document_store()
+    print("hi")
     doc_embedder, text_embedder = create_embedders()
+    print("hi 2")
     retriever = create_retriever(store)
+    print("hi 3")
 
-    records = load_all_records(paths or IngestPaths())
-    docs = to_haystack_documents(records)
+    docs = load_all_records(paths or IngestPaths())
+    print("hi 4")
+    # docs = to_haystack_documents(records)
     index_documents(store, doc_embedder, docs)
+    print("hi 6")
 
     return RagResources(text_embedder=text_embedder, retriever=retriever)
 
@@ -60,7 +65,9 @@ def get_rag_resources() -> RagResources:
 
 def retrieve_documents(question: str, top_k: int = 5) -> list[Document]:
     resources = get_rag_resources()
+    print('after resources')
     embedding = resources.text_embedder.run(text=question)["embedding"]
+    print('after embedding')
     result = resources.retriever.run(query_embedding=embedding, top_k=top_k)
     return result["documents"]
 

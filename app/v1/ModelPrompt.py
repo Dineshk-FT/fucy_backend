@@ -31,7 +31,7 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-gemini_client = GeminiClient(os.getenv("GOOGLE_API_KEY"), os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+gemini_client = GeminiClient("AIzaSyCJ6vlGZf3DNrlaFpZrKcgcKKNcGAaoWQU", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 
 #1- Prompt template for label creation (inputs for the model)
@@ -95,11 +95,11 @@ def get_system_inputs():
 #2- Item definition prompt
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
+    # user provided input: system name
     """Generate ReactFlow template - can be called as route or function"""
     try:
         if not request_data:
             request_data = request
-
         # Static fields
         user_id = request.headers.get("user-id")
         created_by = request_data.form.get("createdBy", "system")
@@ -107,7 +107,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
 
         # Optional user-provided descriptive prompt (above data structure)
         custom_prompt = request_data.form.get("itemDefinitionPrompt")
-
         # Dynamically collect all other form fields (excluding static + prompt)
         static_fields = {"createdBy", "systemName", "prompt"}
         dynamic_fields = {
@@ -115,7 +114,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             for key in request_data.form
             if key not in static_fields
         }
-
         # Convert dynamic fields into prompt format
         dynamic_prompt_lines = "\n".join([
             f"{key.replace('_', ' ').title()}: {value}"
@@ -123,36 +121,36 @@ def generate_reactflow_template(standalone=False, request_data=None):
         ])
 
         # --- Default description (above Data structure) ---
-        default_description = """
-            You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
-            Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
-            The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
+        # default_description = """
+        #     You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
+        #     Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
+        #     The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
 
-            1. **Item Name** - The name of the system or feature.
-            2. **Item Purpose** - The high-level purpose and intended functionality.
-            3. **Operational Description** - How the item operates, key functions, and operational scenarios.
-            4. **Boundaries of the Item** - What is inside and outside the scope (physical and logical boundaries).
-            5. **Interfaces** - All relevant physical, data, and network interfaces.
-            6. **Assumptions and Constraints** - Any limitations, regulations, or environmental conditions.
-            7. **Dependencies** - Dependencies on other systems or components.
-            8. **Stakeholders** - Relevant stakeholders (OEM, supplier, regulator, user, etc.).
-            9. **System Diagram** - A block diagram showing major components, interfaces, and external connections.
+        #     1. **Item Name** - The name of the system or feature.
+        #     2. **Item Purpose** - The high-level purpose and intended functionality.
+        #     3. **Operational Description** - How the item operates, key functions, and operational scenarios.
+        #     4. **Boundaries of the Item** - What is inside and outside the scope (physical and logical boundaries).
+        #     5. **Interfaces** - All relevant physical, data, and network interfaces.
+        #     6. **Assumptions and Constraints** - Any limitations, regulations, or environmental conditions.
+        #     7. **Dependencies** - Dependencies on other systems or components.
+        #     8. **Stakeholders** - Relevant stakeholders (OEM, supplier, regulator, user, etc.).
+        #     9. **System Diagram** - A block diagram showing major components, interfaces, and external connections.
 
-            **Requirements for the System Diagram**:
-            - Clearly identify ECUs, sensors, actuators, communication buses, and external entities (e.g., cloud services, mobile apps).
-            - Use clear labels for each component and interface.
-            - Show data flows and connection types (wired, wireless, CAN, Ethernet, Bluetooth, etc.).
-            - Represent external systems and boundaries distinctly.
+        #     **Requirements for the System Diagram**:
+        #     - Clearly identify ECUs, sensors, actuators, communication buses, and external entities (e.g., cloud services, mobile apps).
+        #     - Use clear labels for each component and interface.
+        #     - Show data flows and connection types (wired, wireless, CAN, Ethernet, Bluetooth, etc.).
+        #     - Represent external systems and boundaries distinctly.
 
-            **Constraints:**
-            - Follow ISO/SAE 21434 terminology.
-            - Keep the description technology-neutral unless otherwise specified.
-            - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
+        #     **Constraints:**
+        #     - Follow ISO/SAE 21434 terminology.
+        #     - Keep the description technology-neutral unless otherwise specified.
+        #     - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
 
-            Now, generate the Item Definition and System Diagram for the following automotive system:
-            """
-
-        # --- Mandatory Data structure section ---
+        #     Now, generate the Item Definition and System Diagram for the following automotive system:
+        #     """
+        
+        # # --- Mandatory Data structure section ---
         data_structure_section = """
             (For Data structure)
             Include :
@@ -189,24 +187,30 @@ def generate_reactflow_template(standalone=False, request_data=None):
             ]
             }
             """
-
+        
+        docs = retrieve_documents(system_name, top_k=5)
+        print("HI")
+        print("DOCS: ", docs)
+        rag_prompt = build_prompt_from_documents(system_name, documents=docs)
+        print("RAG PROMPT: ", rag_prompt)
         # --- Final prompt assembly ---
         prompt = f"""
             Return ONLY valid JSON for a React Flow diagram for the system below:
 
-            {custom_prompt if custom_prompt else default_description}
+            {rag_prompt} # custom prompt == rag prompt
 
             System Name: {system_name}
-            {dynamic_prompt_lines}
 
             {data_structure_section}
             """
 
         # Call Gemini
-        
+        print("PROMPT: ", prompt)
         response = gemini_client.generate_content(prompt)
+        print("GEMINI RESPONSE: ", response)
         output = gemini_client.get_text(response).strip()
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
+        print("GEMINI CLEANED RESPONSE: ", output)
 
         # Parse JSON
         try:
@@ -216,19 +220,36 @@ def generate_reactflow_template(standalone=False, request_data=None):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON from Gemini: {e}\nRaw: {cleaned}")
 
-        if 'templates' in data:
-            minimal_nodes = data['templates']['nodes']
-            minimal_edges = data['templates']['edges']
+        if 'templates' in data and isinstance(data['templates'], dict):
+            template_data = data['templates']
         elif 'nodes' in data and 'edges' in data:
-            minimal_nodes = data['nodes']
-            minimal_edges = data['edges']
+            template_data = data
+        elif (
+            'assets' in data
+            and isinstance(data['assets'], dict)
+            and 'template' in data['assets']
+            and isinstance(data['assets']['template'], dict)
+        ):
+            template_data = data['assets']['template']
         else:
+            raise ValueError("Invalid response format from Gemini")
+
+        minimal_nodes = template_data.get('nodes', [])
+        minimal_edges = template_data.get('edges', [])
+
+        if not isinstance(minimal_nodes, list) or not isinstance(minimal_edges, list):
             raise ValueError("Invalid response format from Gemini")
 
         # Build full template
         full_nodes = [build_basic_node(n) for n in minimal_nodes]
         positioned_nodes = calculate_node_positions(full_nodes)
-        full_edges = [build_full_edge(e) for e in minimal_edges]
+        normalized_edges = []
+        for e in minimal_edges:
+            edge = dict(e)
+            edge.setdefault("sourceHandle", "bottom")
+            edge.setdefault("targetHandle", "top")
+            normalized_edges.append(edge)
+        full_edges = [build_full_edge(e) for e in normalized_edges]
 
         final_result = {
             "nodes": positioned_nodes,
@@ -562,8 +583,8 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
     """
 
     # Call Gemini
-    docs = retrieve_documents(user_prompt, top_k=5)
-    prompt = build_prompt_from_documents(user_prompt, documents=docs)
+    # docs = retrieve_documents(user_prompt, top_k=5)
+    # prompt = build_prompt_from_documents(user_prompt, documents=docs)
     gemini_response = gemini_client.generate_content(prompt)
     try:
         content_text = gemini_client.get_text(gemini_response)

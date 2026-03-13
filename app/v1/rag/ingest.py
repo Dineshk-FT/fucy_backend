@@ -6,12 +6,18 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
+from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient
 
 from haystack import Document
 from haystack.document_stores.in_memory import InMemoryDocumentStore
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder
 
+relationships = {
+    "CAPEC-66": ["CWE-89"],
+    "CAPEC-100": ["CWE-79"],
+    "CAPEC-115": ["CWE-119"],
+}
 
 blob = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net")
 rag_container = blob.get_container_client("rag")
@@ -20,150 +26,174 @@ rag_container = blob.get_container_client("rag")
 class IngestPaths:
     annex_path: str = "annex.json"
     data_path: str = "data.json"
+    mitre_mobile_path: str = "mobile-attack (1).json"
+    mitre_ics_path: str = "ics-attack (1).json"
+    atm_path: str = "atm.json"
+    capec_path: str = "capec_v3.9.xml"
+    cwe_path: str = "cwec_v4.19.1.xml"
 
+def chunk_text(text, chunk_size=400, overlap=50):
+    chunks = []
+    start = 0
 
-def load_ecu_data() -> list[dict[str, Any]]:
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += chunk_size - overlap
+
+    return chunks
+
+def load_ecu_data(data_blob_name: str = "data.json") -> list[dict[str, Any]]:
+    # change this
     blob = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net")
     rag_container = blob.get_container_client("rag")
-    bc = rag_container.get_blob_client("rag", IngestPaths.data_path)
+    bc = rag_container.get_blob_client(data_blob_name)
     raw = bc.download_blob().readall()
     ecu_data = json.loads(raw)
 
     # with open(data_path, "r", encoding="utf-8") as f:
     #     ecu_data = json.load(f)
-
-    if isinstance(ecu_data, dict):
-        return list(ecu_data.values())
-    if isinstance(ecu_data, list):
-        return ecu_data
-
-    return [{"type": "ECU", "content": json.dumps(ecu_data, indent=2)}]
-
+    ecu_docs = []
+    for k, v in ecu_data.items():
+        ecu_docs.append(
+            Document(
+                content=json.dumps(v, indent=2),
+                meta={
+                    "source": "ECU",
+                    "title": k
+                }
+            )
+        )
+    print("ECU Loaded")
+    return ecu_docs
 
 def load_clause_jsons() -> list[dict[str, Any]]:
+    # add metadata here
 
     records = []
-
     blob = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net")
     rag_container = blob.get_container_client("rag")
 
     for b in rag_container.list_blobs(name_starts_with="clause"):
         name = b.name
-        bc = rag_container.get_blob_client("rag", name)
+        bc = rag_container.get_blob_client(name)
         
         raw = bc.download_blob().readall()
         clause = json.loads(raw)
         number = int(re.search(r'-(\d+)\.json', name).group(1))
-
+        
         records.append(
-            {
-                "type": "Clause",
-                "clause": number,
-                "title": clause.get("title", f"Clause {number}"),
-                "content": clause.get("content", json.dumps(clause, indent=2)),
-            }
+            Document(
+                content=clause.get(
+                    "content",
+                    json.dumps(clause, indent=2)
+                ),
+                meta={
+                    "source": "ISO_21434",
+                    "clause": number,
+                    "title": clause.get("title", f"Clause {number}")
+                }
+            )
         )
-
-
-    # for file in clause_files:
-    #     with open(file, "r", encoding="utf-8") as f:
-    #         clause = json.load(f)
-
-    #     clause_number = os.path.splitext(os.path.basename(file))[0].split("-")[1]
-
-    #     records.append(
-    #         {
-    #             "type": "Clause",
-    #             "clause": clause_number,
-    #             "title": clause.get("title", f"Clause {clause_number}"),
-    #             "content": clause.get("content", json.dumps(clause, indent=2)),
-    #         }
-    #     )
+    
 
     return records
 
-
-def load_annex() -> list[dict[str, Any]]:
-
+def load_annex(annex_blob_name: str = "annex.json") -> list[dict[str, Any]]:
+    # annex contains impact information
     blob = BlobServiceClient.from_connection_string("DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net")
     rag_container = blob.get_container_client("rag")
-    bc = rag_container.get_blob_client("rag", IngestPaths.annex_path)
+    bc = rag_container.get_blob_client(annex_blob_name)
     raw = bc.download_blob().readall()
     annex_json = json.loads(raw)
 
-    # with open(annex_path, "r", encoding="utf-8") as f:
-    #     annex_json = json.load(f)
+    annex_docs = []
 
-    annex_records = []
+    content_parts = [
+        f"Annex {annex_json.get('annex_id', '')}: {annex_json.get('annex_title', '')}"
+    ]
 
-    if isinstance(annex_json, dict) and "annex_id" in annex_json:
-        parts = [
-            f"Annex {annex_json.get('annex_id')} — {annex_json.get('annex_title')}"
-        ]
+    for section in annex_json.get("sections", []):
+        content_parts.append(
+            f"\n\n### {section.get('section_id')} — {section.get('section_title')}"
+        )
 
-        for section in annex_json.get("sections", []):
-            parts.append(
-                f"\n### {section.get('section_id')} — {section.get('section_title')}"
+        for c in section.get("content", []):
+            content_parts.append(f"- {c}")
+
+        for t in section.get("tables", []):
+            content_parts.append(
+                f"\nTable {t.get('table_id')}: {t.get('table_title')}"
             )
+            cols = t.get("columns", [])
+            rows = t.get("rows", [])
 
-            for c in section.get("content", []):
-                parts.append(f"- {c}")
+            if cols and rows:
+                content_parts.append(" | ".join(cols))
+                content_parts.append("-" * 40)
+                for r in rows:
+                    content_parts.append(
+                        " | ".join(str(r.get(col, "")) for col in cols)
+                    )
 
-            for t in section.get("tables", []):
-                parts.append(f"\nTable {t.get('table_id')}: {t.get('table_title')}")
+        for note in section.get("notes", []):
+            content_parts.append(f"Note: {note}")
 
-                if "columns" in t and "rows" in t:
-                    parts.append(" | ".join(t["columns"]))
-                    parts.append("-" * 40)
-                    for row in t["rows"]:
-                        parts.append(
-                            " | ".join(str(row.get(col, "")) for col in t["columns"])
-                        )
-
-            for note in section.get("notes", []):
-                parts.append(f"Note: {note}")
-
-        annex_records.append(
-            {
-                "type": "Annex",
-                "title": annex_json.get("annex_title"),
-                "content": "\n".join(parts),
+    annex_docs.append(
+        Document(
+            content="\n".join(content_parts),
+            meta={
+                "source": "ANNEX_F",
+                "annex": annex_json.get("annex_id"),
+                "title": annex_json.get("annex_title")
             }
         )
-    else:
-        annex_records.append(
-            {
-                "type": "Annex",
-                "content": json.dumps(annex_json, indent=2),
-            }
-        )
-
-    return annex_records
-
+    )
+    return annex_docs
 
 def load_all_records(paths: IngestPaths) -> list[dict[str, Any]]:
-    return (
-        load_ecu_data()
+    records = (
+        load_ecu_data("data.json")
         + load_clause_jsons()
-        + load_annex()
+        + load_annex("annex.json")
+        + ingest_mitre("mobile-attack.json", "MITRE_MOBILE")
+        + ingest_mitre("ics-attack.json", "MITRE_ICS")
+        + ingest_atm("atm.json")
+        + ingest_capec("capec_v3.9.xml")
+        + ingest_cwe("cwec_v4.19.1.xml")
     )
+    print("INGESTED ALL RECORDS")
 
+    return records
 
-def to_haystack_documents(records: Iterable[dict[str, Any]]) -> list[Document]:
-    docs = []
+def to_haystack_documents(records: Iterable[dict[str, Any] | Document]) -> list[Document]:
+    docs: list[Document] = []
+    seen_ids: set[str] = set()
+    duplicate_count = 0
+
     for item in records:
-        docs.append(
-            Document(
+        if isinstance(item, Document):
+            doc = item
+        else:
+            meta = {k: v for k, v in item.items() if k not in {"content", "type"}}
+            meta["source"] = item.get("type") or "Unknown"
+            doc = Document(
                 content=item.get("content", ""),
-                meta={
-                    "source": item.get("type"),
-                    "title": item.get("title"),
-                    "clause": item.get("clause"),
-                },
+                meta=meta,
             )
-        )
-    return docs
 
+        if doc.id in seen_ids:
+            duplicate_count += 1
+            continue
+
+        seen_ids.add(doc.id)
+        docs.append(doc)
+
+    if duplicate_count:
+        print(f"[RAG] Skipped {duplicate_count} duplicate document(s) during ingest.")
+
+    return docs
 
 def index_documents(
     document_store: InMemoryDocumentStore,
@@ -176,7 +206,6 @@ def index_documents(
     document_store.write_documents(embedded_docs, policy="overwrite")
     return embedded_docs
 
-
 def summarize_by_source(docs: list[Document]) -> dict[str, int]:
     out = {}
     for d in docs:
@@ -184,243 +213,180 @@ def summarize_by_source(docs: list[Document]) -> dict[str, int]:
         out[src] = out.get(src, 0) + 1
     return out
 
-
-def ingest_mitre(mitre_blob_name: str, source: str = "MITRE") -> list[dict[str, Any]]:
-    """
-    Ingests a MITRE ATT&CK STIX-like JSON bundle from Azure blob storage.
-
-    Returns records like:
-      {"type": "MITRE_ICS", "title": "Txxxx Technique Name", "content": "...", ...}
-    """
-    bc = rag_container.get_blob_client("rag", mitre_blob_name)
+def ingest_mitre(mitre_blob_name: str, source: str = "MITRE"):
+    rag_container = blob.get_container_client("rag")
+    bc = rag_container.get_blob_client(mitre_blob_name)
     raw = bc.download_blob().readall()
-    bundle = json.loads(raw)
+    data = json.loads(raw)
 
-    records: list[dict[str, Any]] = []
+    docs = []
 
-    objects = bundle.get("objects", []) if isinstance(bundle, dict) else []
-    if not isinstance(objects, list):
-        return records
+    for obj in data.get("objects", []):
 
-    for obj in objects:
-        if not isinstance(obj, dict):
-            continue
-        if obj.get("type") != "attack-pattern":
-            continue
+        if obj.get("type") == "attack-pattern":
 
-        name = obj.get("name", "")
-        desc = obj.get("description", "")
+            name = obj.get("name", "")
+            desc = obj.get("description", "")
 
-        technique_id = ""
-        url = ""
-        refs = obj.get("external_references", [])
-        if isinstance(refs, list):
-            for ref in refs:
-                if not isinstance(ref, dict):
-                    continue
-                ext_id = ref.get("external_id", "")
-                if isinstance(ext_id, str) and ext_id.startswith("T") and not technique_id:
-                    technique_id = ext_id
-                if not url and ref.get("url"):
-                    url = ref.get("url")
+            if not desc:
+                continue
 
-        tactics = []
-        kcp = obj.get("kill_chain_phases", [])
-        if isinstance(kcp, list):
-            for p in kcp:
-                if isinstance(p, dict) and p.get("phase_name"):
-                    tactics.append(p.get("phase_name"))
+            text = f"MITRE Technique: {name}\nDescription: {desc}"
 
-        platforms = obj.get("x_mitre_platforms", [])
-        if not isinstance(platforms, list):
-            platforms = []
+            chunks = chunk_text(text)
 
-        lines = []
-        header = f"{technique_id} {name}".strip() if technique_id else str(name).strip()
-        if header:
-            lines.append(f"Technique: {header}")
-        if tactics:
-            lines.append(f"Tactics: {', '.join(str(t) for t in tactics if t)}")
-        if platforms:
-            lines.append(f"Platforms: {', '.join(str(p) for p in platforms if p)}")
-        if url:
-            lines.append(f"Reference: {url}")
-        if desc:
-            lines.append("")
-            lines.append(str(desc).strip())
+            for chunk in chunks:
 
-        records.append(
-            {
-                "type": source,
-                "title": header or source,
-                "content": "\n".join(lines).strip(),
-                "technique_id": technique_id,
-                "url": url,
-            }
-        )
+                docs.append(
+                    Document(
+                        content=chunk,
+                        meta={
+                            "source": source,
+                            "stix_id": obj.get("id"),
+                            "technique": name
+                        }
+                    )
+                )
 
-    return records
+    return docs
 
-
-def ingest_atm(atm_blob_name: str = "atm.json") -> list[dict[str, Any]]:
+def ingest_atm(atm_blob_name: str = "atm.json"):
     """
     Ingests an Automotive Threat Matrix JSON from Azure blob storage.
     Handles common shapes (list or dict with techniques/entries).
     """
-    bc = rag_container.get_blob_client("rag", atm_blob_name)
+    rag_container = blob.get_container_client("rag")
+    bc = rag_container.get_blob_client(atm_blob_name)
     raw = bc.download_blob().readall()
-    atm_json = json.loads(raw)
+    data = json.loads(raw)
 
-    records: list[dict[str, Any]] = []
+    docs = []
 
-    entries: list[Any] = []
-    if isinstance(atm_json, list):
-        entries = atm_json
-    elif isinstance(atm_json, dict):
-        for key in ("techniques", "entries", "objects", "data"):
-            v = atm_json.get(key)
-            if isinstance(v, list):
-                entries = v
-                break
-        if not entries:
-            vals = list(atm_json.values())
-            if vals and all(isinstance(x, dict) for x in vals):
-                entries = vals
+    for obj in data.get("objects", []):
 
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
+        if obj.get("type") == "attack-pattern":
 
-        atm_id = e.get("id") or e.get("technique_id") or e.get("external_id") or ""
-        name = e.get("name") or e.get("title") or atm_id or ""
-        desc = e.get("description") or e.get("details") or ""
-        domain = e.get("domain") or e.get("matrix") or ""
+            name = obj.get("name", "")
+            desc = obj.get("description", "")
 
-        header = f"{atm_id} — {name}".strip(" —")
-        lines = [header] if header else [str(name)]
-        if domain:
-            lines.append(f"Domain: {domain}")
-        if desc:
-            lines.append("")
-            lines.append(str(desc).strip())
+            if not desc:
+                continue
 
-        records.append(
-            {
-                "type": "ATM",
-                "title": header or str(name) or "ATM",
-                "content": "\n".join(lines).strip(),
-                "atm_id": str(atm_id),
-                "domain": str(domain),
-            }
-        )
+            text = f"ATM Technique: {name}\nDescription: {desc}"
 
-    return records
+            chunks = chunk_text(text)
 
+            for chunk in chunks:
 
-def ingest_capec(capec_blob_name: str = "capec.xml") -> list[dict[str, Any]]:
+                docs.append(
+                    Document(
+                        content=chunk,
+                        meta={
+                            "source": "ATM",
+                            "stix_id": obj.get("id"),
+                            "technique": name
+                        }
+                    )
+                )
+    print("ATM DONE")
+    return docs
+
+def ingest_capec(capec_blob_name: str = "capec.xml"):
     """
     Ingests CAPEC XML from Azure blob storage using xml.etree.ElementTree.
     Extracts Attack_Pattern/Attack_Patterns with ID, Name, and Summary/Description.
     """
     import xml.etree.ElementTree as ET
+    rag_container = blob.get_container_client("rag")
+    bc = rag_container.get_blob_client(capec_blob_name)
+    raw = bc.download_blob().readall()
+    root = ET.fromstring(raw)
 
-    bc = rag_container.get_blob_client("rag", capec_blob_name)
-    xml_bytes = bc.download_blob().readall()
+    ns = {"capec": "http://capec.mitre.org/capec-3"}
 
-    records: list[dict[str, Any]] = []
-
-    root = ET.fromstring(xml_bytes)
-
-    # Prefer namespace-tolerant finds
-    patterns = root.findall(".//{*}Attack_Pattern")
+    docs = []
+    patterns = root.findall(".//capec:Attack_Pattern", ns)
     if not patterns:
-        # Some CAPEC dumps may use different casing
-        patterns = root.findall(".//{*}attack_pattern")
+        patterns = root.findall(".//{*}Attack_Pattern")
 
     for ap in patterns:
-        capec_id = ap.attrib.get("ID") or ap.attrib.get("Id") or ap.attrib.get("id") or ""
-        name = ap.findtext(".//{*}Name") or ap.findtext(".//{*}name") or ""
-        summary = ap.findtext(".//{*}Summary") or ap.findtext(".//{*}Description") or ""
 
-        header = f"CAPEC-{capec_id} — {name}".strip(" —")
-        content = "\n".join([header, "", str(summary).strip()]).strip()
+        capec_id = ap.get("ID")
 
-        records.append(
-            {
-                "type": "CAPEC",
-                "title": header or str(name) or "CAPEC",
-                "content": content,
-                "capec_id": f"CAPEC-{capec_id}" if capec_id else "",
-            }
-        )
+        name = ap.findtext("capec:Name", default="", namespaces=ns)
+        desc = ap.findtext("capec:Description", default="", namespaces=ns)
 
-    return records
+        if not desc:
+            continue
 
+        text = f"CAPEC-{capec_id}: {name}\nDescription: {desc}"
 
-def ingest_cwe(cwe_blob_name: str = "cwe.xml") -> list[dict[str, Any]]:
+        chunks = chunk_text(text)
+
+        related_cwe = relationships.get(f"CAPEC-{capec_id}", [])
+
+        for chunk in chunks:
+
+            docs.append(
+                Document(
+                    content=chunk,
+                    meta={
+                        "source": "CAPEC",
+                        "capec_id": f"CAPEC-{capec_id}",
+                        "attack_pattern": name,
+                        "related_cwe": related_cwe
+                    }
+                )
+            )
+    print("ended capec ingestion")
+    return docs
+
+def ingest_cwe(cwe_blob_name: str = "cwe.xml"):
     """
     Ingests CWE XML from Azure blob storage.
     Tries lxml for robustness (huge files); falls back to ElementTree.
     Extracts Weakness entries (ID, Name, Description).
     """
-    bc = rag_container.get_blob_client("rag", cwe_blob_name)
-    xml_bytes = bc.download_blob().readall()
-
-    records: list[dict[str, Any]] = []
-
-    # Try lxml first (better for huge CWE dumps)
+    rag_container = blob.get_container_client("rag")
+    bc = rag_container.get_blob_client(cwe_blob_name)
+    raw = bc.download_blob().readall()
     try:
         from lxml import etree as LET  # type: ignore
-
         parser = LET.XMLParser(recover=True, huge_tree=True)
-        root = LET.fromstring(xml_bytes, parser=parser)
-
-        for w in root.findall(".//{*}Weakness"):
-            cwe_id = w.get("ID") or ""
-            name = w.get("Name") or ""
-            desc_el = w.find(".//{*}Description")
-            desc = desc_el.text if desc_el is not None and desc_el.text else ""
-
-            header = f"CWE-{cwe_id} — {name}".strip(" —")
-            content = "\n".join([header, "", str(desc).strip()]).strip()
-
-            records.append(
-                {
-                    "type": "CWE",
-                    "title": header or str(name) or "CWE",
-                    "content": content,
-                    "cwe_id": f"CWE-{cwe_id}" if cwe_id else "",
-                }
-            )
-
-        return records
-
+        root = LET.fromstring(raw, parser=parser)
     except Exception:
-        pass
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(raw)
 
-    # Fallback: ElementTree
-    import xml.etree.ElementTree as ET
-
-    root = ET.fromstring(xml_bytes)
+    docs = []
 
     for w in root.findall(".//{*}Weakness"):
-        cwe_id = w.attrib.get("ID") or ""
-        name = w.attrib.get("Name") or ""
-        desc = ""
-        d = w.find(".//{*}Description")
-        if d is not None and d.text:
-            desc = d.text
 
-        header = f"CWE-{cwe_id} — {name}".strip(" —")
-        content = "\n".join([header, "", str(desc).strip()]).strip()
+        cwe_id = w.get("ID")
+        name = w.get("Name")
 
-        records.append(
-            {
-                "type": "CWE",
-                "title": header or str(name) or "CWE",
-                "content": content,
-                "cwe_id": f"CWE-{cwe_id}" if cwe_id else "",
-            }
-        )
+        desc_elem = w.find(".//{*}Description")
 
-    return records
+        desc = desc_elem.text if desc_elem is not None else ""
+
+        if not desc:
+            continue
+
+        text = f"CWE-{cwe_id}: {name}\nDescription: {desc}"
+
+        chunks = chunk_text(text)
+
+        for chunk in chunks:
+
+            docs.append(
+                Document(
+                    content=chunk,
+                    meta={
+                        "source": "CWE",
+                        "cwe_id": f"CWE-{cwe_id}",
+                        "weakness": name
+                    }
+                )
+            )
+
+    return docs

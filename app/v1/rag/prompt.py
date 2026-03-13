@@ -3,85 +3,203 @@ from __future__ import annotations
 from haystack.components.builders import PromptBuilder
 
 ISO21434_CLAUSE15_TEMPLATE = """
-You are an automotive cybersecurity analyst performing a Threat Analysis and Risk Assessment (TARA)
-strictly according to ISO/SAE 21434 Clause 15.
+You are an automotive cybersecurity analyst performing Threat Analysis and Risk Assessment (TARA)
+according to ISO/SAE 21434 Clause 15.
 
-If a property is NOT applicable, explicitly mark it as Not Applicable (N/A).
-DO NOT omit any property.
+Your task is to generate a system architecture model and cybersecurity damage scenarios
+for the requested automotive ECU or system.
 
-Your task is to generate a professional, deterministic, and ISO-compliant TARA report
-in Markdown format ONLY for the given ECU or system.
+STRICT KNOWLEDGE RULES
 
-STRICT RULES (DO NOT VIOLATE):
-- Follow the structure EXACTLY as provided
-- Do NOT rename sections
-- Do NOT add or remove sections
-- Do NOT change definitions
-- Do NOT invent new scoring models
-- Do NOT output explanations, disclaimers, or commentary
-- Do NOT vary terminology across runs
+- Use ONLY information relevant to the requested system.
+- Do NOT invent unrelated vehicle components.
+- Assets must belong to the requested ECU/system.
+- Use realistic automotive architecture.
+- Prefer knowledge retrieved from the provided cybersecurity context.
+- If information is missing, infer only common industry-standard components.
 
-Failure to follow these rules is a critical compliance violation.
+Cybersecurity knowledge context may include:
 
----
+- ISO 21434 clauses
+- CWE weaknesses
+- CAPEC attack patterns
+- MITRE ATT&CK techniques
+- Automotive Threat Matrix (ATM)
 
-# ISO/SAE 21434 Clause 15 TARA Report
+Threat reasoning must follow:
 
-## 1. Item Definition (Clause 8)
+CWE (root weakness) → CAPEC (attack pattern) → MITRE ATT&CK (attack technique) → ATM relevance → Damage Scenario
 
-Using the provided ECU/system information, summarize:
+-------------------------------------------------
 
-- Item name  
-- Function  
-- Boundaries and interfaces  
-- Assumptions and dependencies  
-- Assets and cybersecurity properties  
-  (Confidentiality, Integrity, Availability)
+SYSTEM REQUEST:
+{{question}}
 
----
+CYBERSECURITY KNOWLEDGE CONTEXT:
+{{documents}}
 
-## 2. Threat Scenario Identification (Clause 15.4)
+-------------------------------------------------
 
-Identify relevant threat scenarios using:
+TASK
 
-- Attack path  
-- Threat description  
-- Targeted asset  
-- Violated cybersecurity property  
+1. Identify the architecture of the requested system.
+2. Generate assets that belong strictly to that system.
+3. Create architecture relationships between assets.
+4. Generate realistic cybersecurity damage scenarios.
+5. For each damage scenario derive an **Impact Rating**.
 
----
+-------------------------------------------------
 
-## 3. Risk Assessment (Clauses 15.6, 15.7)
+IMPACT RATING SCALE
 
-For each threat scenario:
+For every damage scenario derive cyber losses using SFOP categories:
 
-- Impact level  
-  (safety, operational, financial, privacy)  
-- Attack feasibility rating  
-- Risk value and risk level  
-- Treatment decision  
-  (avoid, reduce, share, accept)
+Safety
+Financial
+Operational
+Privacy
 
----
+For each cyber loss assign an impact rating using:
 
-## 4. Cybersecurity Goals and Mitigations (Clauses 10 & 11)
+Negligible
+Minor
+Moderate
+Major
+Severe
 
-For each threat scenario:
+Then derive an overall impact rating based on the highest impact.
+-------------------------------------------------
 
-- Cybersecurity goal  
-- Security control / mitigation  
-- Mapped violated cybersecurity property  
+STRICT OUTPUT FORMAT
 
----
+Return ONLY valid JSON.
 
-## 5. Residual Risk (Clauses 8 & 11)
+Do not include explanations.
 
-Summarize remaining risks after mitigations and required verification activities.
+Return JSON exactly in this structure:
 
----
+{
+ "assets":{
+   "_id":"",
+   "user_id":"",
+   "model_id":"",
 
-Use only the information provided in the context documents.
-If information is missing, state Not Applicable (N/A).
+   "template":{
+      "nodes":[
+         {
+           "id":"",
+           "type":"component",
+           "parentId":"",
+           "isAsset":true,
+           "data":{
+              "label":"",
+              "description":""
+           },
+           "properties":[
+              "Integrity",
+              "Confidentiality",
+              "Availability"
+           ],
+           "style":{
+              "width":200,
+              "height":80
+           },
+           "position":{
+              "x":0,
+              "y":0
+           }
+         }
+      ],
+
+      "edges":[
+         {
+           "id":"",
+           "source":"",
+           "target":"",
+           "type":"smoothstep",
+           "data":{
+              "label":""
+           }
+         }
+      ],
+
+      "details":[
+         {
+           "nodeId":"",
+           "name":"",
+           "desc":"",
+           "type":"",
+           "props":[
+             {
+               "name":"",
+               "id":""
+             }
+           ]
+         }
+      ]
+   }
+ },
+
+ "damage_scenarios":{
+   "_id":"",
+   "model_id":"",
+   "type":"damage",
+
+   "derivation":[
+      {
+        "id":"",
+        "nodeId":"",
+        "task":"Threat Analysis",
+        "name":"",
+        "loss":"",
+        "asset":"",
+        "damage_scene":"",
+        "isChecked":false
+      }
+   ],
+
+   "details":[
+  {
+    "Name":"",
+    "Description":"",
+    "cyberLosses":[
+      {
+        "id":"",
+        "name":"",
+        "node":"",
+        "nodeId":"",
+        "isSelected":true,
+        "is_risk_added":false
+      }
+    ],
+    "impacts":{
+      "Financial Impact":"",
+      "Safety Impact":"",
+      "Operational Impact":"",
+      "Privacy Impact":""
+    },
+    "key":1,
+    "_id":""
+  }
+]
+}
+]
+}
+}
+-------------------------------------------------
+
+CONSTRAINTS
+
+- Generate at least 10 assets belonging to the requested system.
+- Assets must match the requested ECU/system architecture.
+- Do NOT generate assets unrelated to the system.
+- Damage scenarios must reference valid nodeId values.
+- Impact rating must be derived from the damage scenario.
+- Use cybersecurity reasoning from CWE, MITRE, CAPEC and ATM.
+
+Return JSON only.
+
+Start the response with '{'.
 """
 
 
