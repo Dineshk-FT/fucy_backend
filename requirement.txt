@@ -24,3 +24,10 @@ dotenv==0.9.9
 svglib==1.5.1
 six==1.16.0
 beautifulsoup4
+
+# New RAG dependencies
+haystack-ai==2.0.0
+sentence-transformers>=2.2.0
+google-ai-haystack==0.1.0
+torch>=2.0.0
+transformers>=4.30.0

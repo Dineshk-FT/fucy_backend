@@ -2,6 +2,9 @@ from flask import current_app as app
 from flask import request, jsonify, json
 from bson import ObjectId
 from db import db
+import os
+from datetime import datetime
+from dotenv import load_dotenv
 
 # import jwt,secrets
 # app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -9,6 +12,8 @@ from flask import Blueprint
 
 
 app = Blueprint("routes", __name__)
+
+load_dotenv()
 
 
 # For Fetching--------------------------------------------------------------------------------------------
@@ -311,5 +316,245 @@ def delete_model():
             jsonify({"message": f"{len(object_ids)} models deleted successfully"}),
             200,
         )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
+# NEW RAG ROUTES - Add these at the end of your routes.py file
+# ============================================================================
+
+# Global variables for RAG
+rag_pipeline = None
+document_store = None
+doc_embedder = None
+query_history = []
+last_result = None
+
+@app.route("/rag/init", methods=["POST"])
+def rag_init():
+    """Initialize RAG pipeline"""
+    global rag_pipeline, document_store, doc_embedder
+    
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user = db.accounts.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "No such user found"}), 404
+
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            return jsonify({"error": "GOOGLE_API_KEY not found in environment"}), 500
+        
+        # Fixed import - using full path from app
+        from app.v1.rag.pipeline import setup_pipeline
+        rag_pipeline, document_store, doc_embedder = setup_pipeline(api_key)
+        
+        return jsonify({
+            "message": "RAG pipeline initialized successfully",
+            "status": "ready"
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/load-data", methods=["POST"])
+def rag_load_data():
+    """Load JSON data into document store"""
+    global doc_embedder, document_store
+    
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user = db.accounts.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "No such user found"}), 404
+
+        if not document_store or not doc_embedder:
+            return jsonify({"error": "RAG pipeline not initialized. Call /rag/init first"}), 400
+
+        data = request.get_json()
+        file_path = data.get('file_path') if data else None
+        
+        if not file_path:
+            return jsonify({"error": "file_path is required"}), 400
+
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"File not found: {file_path}"}), 404
+
+        # Fixed import - using full path from app
+        from app.v1.rag.data_ingestion import load_json_to_store
+        count = load_json_to_store(file_path, doc_embedder, document_store)
+        
+        return jsonify({
+            "message": f"Successfully loaded {count} documents",
+            "document_count": count
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/query", methods=["POST"])
+def rag_query():
+    """Process a natural language query"""
+    global rag_pipeline, query_history, last_result
+    
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user = db.accounts.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "No such user found"}), 404
+
+        if not rag_pipeline:
+            return jsonify({"error": "RAG pipeline not initialized. Call /rag/init first"}), 400
+
+        data = request.get_json()
+        query_text = data.get('query') if data else None
+        top_k = data.get('top_k', 75) if data else 75
+        
+        if not query_text:
+            return jsonify({"error": "query is required"}), 400
+
+        # Fixed import - using full path from app
+        from app.v1.rag.query_handler import process_query as process
+        result = process(query_text, rag_pipeline, top_k=top_k)
+        
+        history_entry = {
+            "query": query_text,
+            "result": result,
+            "user_id": user_id,
+            "timestamp": str(datetime.now())
+        }
+        query_history.append(history_entry)
+        last_result = result
+        
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/history", methods=["GET"])
+def rag_history():
+    """Get query history"""
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user_history = [
+            {"query": h["query"], "timestamp": h.get("timestamp")} 
+            for h in query_history 
+            if h.get("user_id") == user_id
+        ]
+        
+        return jsonify({
+            "history": user_history,
+            "count": len(user_history)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/history/<int:index>", methods=["GET"])
+def rag_history_item(index):
+    """Get specific history item"""
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user_history = [h for h in query_history if h.get("user_id") == user_id]
+        
+        if index < 1 or index > len(user_history):
+            return jsonify({"error": "Invalid history index"}), 404
+        
+        return jsonify(user_history[index-1]), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/download/last", methods=["GET"])
+def rag_download_last():
+    """Download last result as JSON file"""
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        global last_result
+        
+        if not last_result:
+            return jsonify({"error": "No result available"}), 404
+        
+        filename = f"rag_result_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        # Fixed import - using full path from app
+        from app.v1.rag.utils import save_result_to_file
+        saved_path = save_result_to_file(last_result, filename)
+        
+        return jsonify({
+            "message": "Result saved successfully",
+            "filename": filename,
+            "path": saved_path
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/download/<int:index>", methods=["GET"])
+def rag_download_history(index):
+    """Download specific history result as JSON file"""
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        user_history = [h for h in query_history if h.get("user_id") == user_id]
+        
+        if index < 1 or index > len(user_history):
+            return jsonify({"error": "Invalid history index"}), 404
+        
+        filename = f"rag_result_{user_id}_{index}_{datetime.now().strftime('%Y%m%d')}.json"
+        
+        # Fixed import - using full path from app
+        from app.v1.rag.utils import save_result_to_file
+        saved_path = save_result_to_file(user_history[index-1]["result"], filename)
+        
+        return jsonify({
+            "message": f"Result #{index} saved successfully",
+            "filename": filename,
+            "path": saved_path
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/rag/status", methods=["GET"])
+def rag_status():
+    """Get RAG pipeline status"""
+    try:
+        user_id = request.headers.get("user-id")
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        doc_count = 0
+        if document_store:
+            try:
+                doc_count = len(document_store.filter_documents())
+            except:
+                pass
+        
+        return jsonify({
+            "initialized": rag_pipeline is not None,
+            "document_count": doc_count,
+            "history_count": len([h for h in query_history if h.get("user_id") == user_id])
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
