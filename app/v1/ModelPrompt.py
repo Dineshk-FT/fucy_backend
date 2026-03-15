@@ -31,7 +31,8 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-gemini_client = GeminiClient("AIzaSyCJ6vlGZf3DNrlaFpZrKcgcKKNcGAaoWQU", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 
 #1- Prompt template for label creation (inputs for the model)
@@ -95,62 +96,46 @@ def get_system_inputs():
 #2- Item definition prompt
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
-    # user provided input: system name
     """Generate ReactFlow template - can be called as route or function"""
     try:
         if not request_data:
             request_data = request
-        # Static fields
-        user_id = request.headers.get("user-id")
-        created_by = request_data.form.get("createdBy", "system")
-        system_name = request_data.form.get("systemName", "Test System")
-
-        # Optional user-provided descriptive prompt (above data structure)
-        custom_prompt = request_data.form.get("itemDefinitionPrompt")
-        # Dynamically collect all other form fields (excluding static + prompt)
-        static_fields = {"createdBy", "systemName", "prompt"}
-        dynamic_fields = {
-            key: request_data.form.get(key)
-            for key in request_data.form
-            if key not in static_fields
-        }
+        
+        # Check if request is JSON or form data
+        if request.is_json:
+            data = request.get_json()
+            user_id = request.headers.get("user-id")
+            created_by = data.get("createdBy", "system")
+            system_name = data.get("systemName", "Test System")
+            custom_prompt = data.get("itemDefinitionPrompt")
+            
+            # Get dynamic fields (exclude static ones)
+            static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "modelId"}
+            dynamic_fields = {k: v for k, v in data.items() if k not in static_fields}
+        else:
+            # Original form data handling
+            user_id = request.headers.get("user-id")
+            created_by = request_data.form.get("createdBy", "system")
+            system_name = request_data.form.get("systemName", "Test System")
+            custom_prompt = request_data.form.get("itemDefinitionPrompt")
+            
+            static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "modelId"}
+            dynamic_fields = {
+                key: request_data.form.get(key)
+                for key in request_data.form
+                if key not in static_fields
+            }
+        
+        print(f"Generating model for system: {system_name} by user: {created_by} (ID: {user_id})")
+        print(f"Dynamic fields: {dynamic_fields}")
+        
         # Convert dynamic fields into prompt format
         dynamic_prompt_lines = "\n".join([
             f"{key.replace('_', ' ').title()}: {value}"
             for key, value in dynamic_fields.items()
         ])
 
-        # --- Default description (above Data structure) ---
-        # default_description = """
-        #     You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
-        #     Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
-        #     The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
-
-        #     1. **Item Name** - The name of the system or feature.
-        #     2. **Item Purpose** - The high-level purpose and intended functionality.
-        #     3. **Operational Description** - How the item operates, key functions, and operational scenarios.
-        #     4. **Boundaries of the Item** - What is inside and outside the scope (physical and logical boundaries).
-        #     5. **Interfaces** - All relevant physical, data, and network interfaces.
-        #     6. **Assumptions and Constraints** - Any limitations, regulations, or environmental conditions.
-        #     7. **Dependencies** - Dependencies on other systems or components.
-        #     8. **Stakeholders** - Relevant stakeholders (OEM, supplier, regulator, user, etc.).
-        #     9. **System Diagram** - A block diagram showing major components, interfaces, and external connections.
-
-        #     **Requirements for the System Diagram**:
-        #     - Clearly identify ECUs, sensors, actuators, communication buses, and external entities (e.g., cloud services, mobile apps).
-        #     - Use clear labels for each component and interface.
-        #     - Show data flows and connection types (wired, wireless, CAN, Ethernet, Bluetooth, etc.).
-        #     - Represent external systems and boundaries distinctly.
-
-        #     **Constraints:**
-        #     - Follow ISO/SAE 21434 terminology.
-        #     - Keep the description technology-neutral unless otherwise specified.
-        #     - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
-
-        #     Now, generate the Item Definition and System Diagram for the following automotive system:
-        #     """
-        
-        # # --- Mandatory Data structure section ---
+        # --- Data structure section ---
         data_structure_section = """
             (For Data structure)
             Include :
@@ -189,10 +174,8 @@ def generate_reactflow_template(standalone=False, request_data=None):
             """
         
         docs = retrieve_documents(system_name, top_k=5)
-        print("HI")
-        print("DOCS: ", docs)
         rag_prompt = build_prompt_from_documents(system_name, documents=docs)
-        print("RAG PROMPT: ", rag_prompt)
+        
         # --- Final prompt assembly ---
         prompt = f"""
             Return ONLY valid JSON for a React Flow diagram for the system below:
@@ -205,21 +188,18 @@ def generate_reactflow_template(standalone=False, request_data=None):
             """
 
         # Call Gemini
-        print("PROMPT: ", prompt)
         response = gemini_client.generate_content(prompt)
-        print("GEMINI RESPONSE: ", response)
         output = gemini_client.get_text(response).strip()
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
-        print("GEMINI CLEANED RESPONSE: ", output)
 
         # Parse JSON
         try:
-    # Remove JS-style comments before parsing
             cleaned_no_comments = re.sub(r'//.*', '', cleaned)
             data = json.loads(cleaned_no_comments)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON from Gemini: {e}\nRaw: {cleaned}")
 
+        # Extract template data
         if 'templates' in data and isinstance(data['templates'], dict):
             template_data = data['templates']
         elif 'nodes' in data and 'edges' in data:
@@ -269,7 +249,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             "type": "model"
         }
         result = db.Models.insert_one(model_doc)
-        # print("result",result)
         model_id = str(result.inserted_id)
 
         # Store asset
@@ -314,6 +293,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
         if standalone:
             raise e
         return jsonify({"error in item definition": str(e)}), 500
+
 
 #3 - Damage scenario creation
 def generate_object_id():
