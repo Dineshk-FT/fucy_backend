@@ -126,9 +126,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
                 if key not in static_fields
             }
         
-        print(f"Generating model for system: {system_name} by user: {created_by} (ID: {user_id})")
-        print(f"Dynamic fields: {dynamic_fields}")
-        
         # Convert dynamic fields into prompt format
         dynamic_prompt_lines = "\n".join([
             f"{key.replace('_', ' ').title()}: {value}"
@@ -173,62 +170,110 @@ def generate_reactflow_template(standalone=False, request_data=None):
             }
             """
         
-        docs = retrieve_documents(system_name, top_k=5)
+        # Retrieve documents from RAG pipeline
+        print(f"Retrieving documents for system: {system_name}")
+        docs = retrieve_documents(system_name, top_k=20)
+        
+        # Build the RAG-enhanced prompt
         rag_prompt = build_prompt_from_documents(system_name, documents=docs)
+        print(f"RAG prompt built with {len(docs)} retrieved documents")
+        
+        # Combine with custom prompt if provided
+        if custom_prompt:
+            enhanced_prompt = f"""
+            System: {system_name}
+            
+            Additional Requirements: {custom_prompt}
+            
+            Based on the cybersecurity knowledge provided below, generate a threat model:
+            
+            {rag_prompt}
+            """
+        else:
+            enhanced_prompt = rag_prompt
         
         # --- Final prompt assembly ---
         prompt = f"""
-            Return ONLY valid JSON for a React Flow diagram for the system below:
-
-            {rag_prompt} # custom prompt == rag prompt
-
+            Return ONLY valid JSON for a React Flow diagram for the system below.
+            
+            {enhanced_prompt}
+            
             System Name: {system_name}
-
+            
             {data_structure_section}
+            
+            Generate nodes and edges that represent the architecture of this automotive system.
+            Include security properties for each node and edge based on the cybersecurity context.
             """
 
         # Call Gemini
+        print("Calling Gemini API...")
         response = gemini_client.generate_content(prompt)
         output = gemini_client.get_text(response).strip()
+        
+        # Clean the output (remove markdown code fences)
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
+        
+        # Remove any JSON comments (// style)
+        cleaned_no_comments = re.sub(r'//.*', '', cleaned)
 
         # Parse JSON
         try:
-            cleaned_no_comments = re.sub(r'//.*', '', cleaned)
             data = json.loads(cleaned_no_comments)
+            print("✅ Successfully parsed JSON from Gemini")
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON from Gemini: {e}\nRaw: {cleaned}")
+            print(f"❌ JSON parse error: {e}")
+            print(f"Raw output: {cleaned[:500]}...")
+            raise ValueError(f"Invalid JSON from Gemini: {e}")
 
-        # Extract template data
+        # Extract template data (handle different possible response structures)
+        template_data = None
+        
         if 'templates' in data and isinstance(data['templates'], dict):
             template_data = data['templates']
         elif 'nodes' in data and 'edges' in data:
             template_data = data
-        elif (
-            'assets' in data
-            and isinstance(data['assets'], dict)
-            and 'template' in data['assets']
-            and isinstance(data['assets']['template'], dict)
-        ):
-            template_data = data['assets']['template']
+        elif 'assets' in data and isinstance(data['assets'], dict):
+            if 'template' in data['assets']:
+                template_data = data['assets']['template']
+            else:
+                template_data = data['assets']
+        elif 'damage_scenarios' in data and 'assets' in data:
+            # This is the TARA format from the notebook
+            template_data = data.get('assets', {}).get('template', {})
         else:
-            raise ValueError("Invalid response format from Gemini")
+            # Try to find any dict with nodes and edges
+            for key, value in data.items():
+                if isinstance(value, dict) and 'nodes' in value and 'edges' in value:
+                    template_data = value
+                    break
+            
+        if not template_data or not isinstance(template_data, dict):
+            print(f"Unexpected response structure: {json.dumps(data, indent=2)[:500]}")
+            raise ValueError("Invalid response format from Gemini - missing nodes/edges")
 
         minimal_nodes = template_data.get('nodes', [])
         minimal_edges = template_data.get('edges', [])
 
         if not isinstance(minimal_nodes, list) or not isinstance(minimal_edges, list):
-            raise ValueError("Invalid response format from Gemini")
+            raise ValueError("Invalid response format from Gemini - nodes/edges must be lists")
 
-        # Build full template
+        print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
+
+        # Build full template with proper styling
         full_nodes = [build_basic_node(n) for n in minimal_nodes]
         positioned_nodes = calculate_node_positions(full_nodes)
+        
+        # Normalize edges
         normalized_edges = []
         for e in minimal_edges:
             edge = dict(e)
             edge.setdefault("sourceHandle", "bottom")
             edge.setdefault("targetHandle", "top")
+            edge.setdefault("type", "step")
+            edge.setdefault("animated", True)
             normalized_edges.append(edge)
+        
         full_edges = [build_full_edge(e) for e in normalized_edges]
 
         final_result = {
@@ -236,7 +281,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             "edges": full_edges
         }
 
-        # Store model
+        # Store model in database
         current = datetime.now()
         model_doc = {
             "name": system_name,
@@ -261,6 +306,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             "Details": Details
         })
 
+        # Store damage scenarios
         db.Damage_scenarios.update_one(
             {"model_id": model_id, "type": "Derived"},
             {
@@ -290,11 +336,13 @@ def generate_reactflow_template(standalone=False, request_data=None):
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         if standalone:
             raise e
         return jsonify({"error in item definition": str(e)}), 500
 
-
+        
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
