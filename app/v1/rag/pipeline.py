@@ -1,47 +1,72 @@
-from __future__ import annotations
+# =============================================================================
+# pipeline.py — Haystack RAG pipeline assembly and run
+# =============================================================================
+
+from collections import Counter
 
 from haystack import Pipeline
 from haystack.components.builders import PromptBuilder
-from haystack.components.embedders import SentenceTransformersTextEmbedder
-from haystack.components.retrievers.in_memory import InMemoryEmbeddingRetriever
+
+from components import build_store, build_retriever, build_generator, EMBED_MODEL, RETRIEVER_TOP_K
+from prompt import TARA_PROMPT_TEMPLATE
 
 
-def build_retrieval_prompt_pipeline(
-    text_embedder: SentenceTransformersTextEmbedder,
-    retriever: InMemoryEmbeddingRetriever,
-    prompt_builder: PromptBuilder,
-) -> Pipeline:
-    """Build a RAG pipeline with retrieval and prompt building."""
+def build_pipeline(all_docs):
+    """
+    Embed documents, build and connect the full Haystack RAG pipeline.
+
+    Returns:
+        pipeline       — assembled, connected Haystack Pipeline
+        text_embedder  — SentenceTransformersTextEmbedder (needed for run_query)
+    """
+    # Build document store and embedders
+    store, text_embedder = build_store(all_docs)
+
+    # Build components
+    retriever      = build_retriever(store)
+    generator      = build_generator()
+    prompt_builder = PromptBuilder(
+        template=TARA_PROMPT_TEMPLATE,
+        required_variables=["documents", "question"],
+    )
+
+    # Assemble pipeline
     pipeline = Pipeline()
-
-    pipeline.add_component("text_embedder", text_embedder)
-    pipeline.add_component("retriever", retriever)
+    pipeline.add_component("text_embedder",  text_embedder)
+    pipeline.add_component("retriever",      retriever)
     pipeline.add_component("prompt_builder", prompt_builder)
+    pipeline.add_component("llm",            generator)
 
     pipeline.connect("text_embedder.embedding", "retriever.query_embedding")
-    pipeline.connect("retriever", "prompt_builder.documents")
+    pipeline.connect("retriever",               "prompt_builder.documents")
+    pipeline.connect("prompt_builder",          "llm")
 
-    print("✅ TARA RAG pipeline built and connected successfully.")
-    return pipeline
+    print("✅ TARA RAG pipeline built and connected.")
+    return pipeline, text_embedder
 
 
-def create_complete_pipeline(
-    text_embedder: SentenceTransformersTextEmbedder,
-    retriever: InMemoryEmbeddingRetriever,
-    prompt_builder: PromptBuilder,
-    llm: object,
-) -> Pipeline:
-    """Build a complete RAG pipeline including LLM generation."""
-    pipeline = Pipeline()
+def run_query(pipeline, user_query: str, enriched_query: str) -> str:
+    """
+    Run the pipeline for a single query.
 
-    pipeline.add_component("text_embedder", text_embedder)
-    pipeline.add_component("retriever", retriever)
-    pipeline.add_component("prompt_builder", prompt_builder)
-    pipeline.add_component("llm", llm)
+    Args:
+        pipeline:       Assembled Haystack pipeline (from build_pipeline).
+        user_query:     Plain query — used for embedding (accurate retrieval).
+        enriched_query: Query + authoritative asset list — used for the LLM prompt.
 
-    pipeline.connect("text_embedder.embedding", "retriever.query_embedding")
-    pipeline.connect("retriever", "prompt_builder.documents")
-    pipeline.connect("prompt_builder", "llm")
+    Returns:
+        Raw LLM reply string.
+    """
+    result = pipeline.run(
+        {
+            "text_embedder":  {"text": user_query},
+            "prompt_builder": {"question": enriched_query},
+        },
+        include_outputs_from=["retriever"],
+    )
 
-    print("✅ Complete TARA RAG pipeline built with LLM.")
-    return pipeline
+    ret_docs = result["retriever"]["documents"]
+    print(f"\nDocuments retrieved : {len(ret_docs)}")
+    print(f"Sources             : {Counter(d.meta.get('source') for d in ret_docs)}\n")
+
+    return result["llm"]["replies"][0] if result["llm"]["replies"] else ""
