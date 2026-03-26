@@ -20,8 +20,9 @@ WORKDIR /app
 # Copy the requirements file into the container at /app
 COPY requirement.txt .
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirement.txt
+# Install any needed packages specified in requirement.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirement.txt
 
 # Copy the rest of the working directory contents into the container at /app
 COPY . .
