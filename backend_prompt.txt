@@ -1,4 +1,9 @@
 
+System: Battery Management system ECU
+
+Additional Requirements: Generate item definition based on the provided system inputs
+
+
 You are an automotive cybersecurity analyst performing Threat Analysis and Risk Assessment (TARA)
 according to ISO/SAE 21434 Clause 15.
 

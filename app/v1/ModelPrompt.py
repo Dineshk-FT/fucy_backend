@@ -145,10 +145,11 @@ def generate_reactflow_template(standalone=False, request_data=None):
         )
         from app.v1.rag.ingest import load_all_documents
         from app.v1.rag.pipeline import build_pipeline
-        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE  # ← YOUR PROMPT TEMPLATE
+        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
         from haystack.components.builders import PromptBuilder
+        from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
         
-        # ── ECU resolution ──────────────────────────────────────────────────
+        # ── ECU resolution and enrichment ───────────────────────────────────
         print(f"Resolving ECU for query: {system_name}")
         
         ecu_entry = rag_resolve_ecu(system_name)
@@ -159,13 +160,13 @@ def generate_reactflow_template(standalone=False, request_data=None):
         else:
             print("No dataecu.json match — using open-ended generation.")
 
-        # Build enriched LLM query (includes authoritative asset list when matched)
+        # Build enriched LLM query with authoritative asset list
         enriched_query = rag_build_enriched_query(system_name, ecu_entry)
         
         print("\n" + "="*80)
         print("ENRICHED QUERY (for LLM):")
         print("="*80)
-        print(enriched_query)
+        print(enriched_query[:1000] + "..." if len(enriched_query) > 1000 else enriched_query)
         print("="*80 + "\n")
 
         # ── Load documents and build pipeline ───────────────────────────────
@@ -180,11 +181,11 @@ def generate_reactflow_template(standalone=False, request_data=None):
         # Retrieve documents using plain system_name for embedding
         print(f"Retrieving documents for system: {system_name}")
         
-        # Run the pipeline to get retrieval - need to pass question to avoid errors
+        # Run the pipeline to get retrieval
         retrieval_result = pipeline.run(
             {
                 "text_embedder": {"text": system_name},
-                "prompt_builder": {"question": enriched_query},  # Pass question to satisfy pipeline
+                "prompt_builder": {"question": enriched_query},
             },
             include_outputs_from=["retriever"],
         )
@@ -201,54 +202,52 @@ def generate_reactflow_template(standalone=False, request_data=None):
         print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
         
         prompt_builder = PromptBuilder(
-            template=TARA_PROMPT_TEMPLATE,  # ← YOUR PROMPT TEMPLATE
+            template=TARA_PROMPT_TEMPLATE,
             required_variables=["documents", "question"],
         )
         
         prompt_result = prompt_builder.run(
             documents=retrieved_docs,
-            question=enriched_query  # ← Pass the enriched query with asset list
+            question=enriched_query
         )
         
         rag_prompt = prompt_result["prompt"]
         
-        print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
-        print(f"RAG prompt length: {len(rag_prompt)} characters")
+        # print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
+        # print(f"RAG prompt length: {len(rag_prompt)} characters")
         
-        print("\n" + "="*80)
-        print("RAG PROMPT (first 2000 chars):")
-        print("="*80)
-        print(rag_prompt[:2000])
-        print("="*80 + "\n")
+        # print("\n" + "="*80)
+        # print("RAG PROMPT (first 2000 chars):")
+        # print("="*80)
+        # print(rag_prompt[:2000])
+        # print("="*80 + "\n")
 
-        # Optionally layer in custom_prompt
+        # ── Combine with custom prompt if provided ──────────────────────────
         if custom_prompt:
             enhanced_prompt = f"""
 System: {system_name}
 
 Additional Requirements: {custom_prompt}
 
-Based on the cybersecurity knowledge provided below, generate a threat model:
-
 {rag_prompt}
 """
         else:
             enhanced_prompt = rag_prompt
 
-        # Dynamic field lines (extra form inputs)
+        # Add dynamic field lines (extra form inputs)
         if dynamic_prompt_lines:
             enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
 
-        # ── Print the FINAL prompt that will be sent to Gemini ───────────────
-        print("\n" + "="*80)
-        print("FINAL PROMPT SENT TO GEMINI:")
-        print("="*80)
-        print(enhanced_prompt)
-        print("="*80)
-        print(f"FINAL PROMPT LENGTH: {len(enhanced_prompt)} characters")
-        print("="*80 + "\n")
+        # ── Save the final prompt for debugging ─────────────────────────────
+        # print("\n" + "="*80)
+        # print("FINAL PROMPT SENT TO GEMINI:")
+        # print("="*80)
+        # print(enhanced_prompt[:2000] + "..." if len(enhanced_prompt) > 2000 else enhanced_prompt)
+        # print("="*80)
+        # print(f"FINAL PROMPT LENGTH: {len(enhanced_prompt)} characters")
+        # print("="*80 + "\n")
 
-        # Also save to file for inspection
+        # Save to file for inspection
         try:
             with open("backend_prompt.txt", "w", encoding="utf-8") as f:
                 f.write(enhanced_prompt)
@@ -262,11 +261,11 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
         output = gemini_client.get_text(response).strip()
 
         # Print Gemini response
-        print("\n" + "="*80)
-        print("GEMINI RESPONSE (first 1000 chars):")
-        print("="*80)
-        print(output[:1000])
-        print("="*80 + "\n")
+        # print("\n" + "="*80)
+        # print("GEMINI RESPONSE (first 1000 chars):")
+        # print("="*80)
+        # print(output[:1000])
+        # print("="*80 + "\n")
 
         # Clean markdown fences and JS-style comments
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
@@ -320,25 +319,75 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
 
         print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
 
-        # ── Build full ReactFlow-ready template ───────────────────────────
-        full_nodes = [build_basic_node(n) for n in minimal_nodes]
-        positioned_nodes = calculate_node_positions(full_nodes)
+        # ── Build full ReactFlow-ready template with enhanced node data ─────
+        # Process nodes to ensure they have all required fields
+        # processed_nodes = []
+        # for node in minimal_nodes:
+        #     processed_node = {
+        #         "id": node.get("id", str(uuid.uuid4())),
+        #         "type": node.get("type", "default"),
+        #         "parentId": node.get("parentId"),
+        #         "data": {
+        #             "label": node.get("data", {}).get("label", ""),
+        #             "description": node.get("data", {}).get("description", ""),
+        #             "style": {
+        #                 "backgroundColor": node.get("data", {}).get("style", {}).get("backgroundColor", "#dadada"),
+        #                 "borderColor": node.get("data", {}).get("style", {}).get("borderColor", "gray"),
+        #                 "borderStyle": "solid",
+        #                 "borderWidth": "2px",
+        #                 "color": "black",
+        #                 "fontFamily": "Inter",
+        #                 "fontSize": "12px",
+        #                 "fontWeight": 500,
+        #                 "height": node.get("data", {}).get("style", {}).get("height", 50),
+        #                 "width": node.get("data", {}).get("style", {}).get("width", 150)
+        #             }
+        #         },
+        #         "properties": node.get("properties", []),
+        #         "isAsset": node.get("isAsset", False),
+        #         "width": node.get("width", 150),
+        #         "height": node.get("height", 50),
+        #         "position": node.get("position", {"x": 0, "y": 0}),
+        #         "positionAbsolute": node.get("positionAbsolute", {"x": 0, "y": 0}),
+        #         "zIndex": node.get("zIndex", 0)
+        #     }
+        #     processed_nodes.append(processed_node)
+        
+        # Calculate node positions for better layout
+        # from app.Methods.helpers import calculate_node_positions
+        # positioned_nodes = calculate_node_positions(processed_nodes)
 
-        normalized_edges = []
-        for e in minimal_edges:
-            edge = dict(e)
-            edge.setdefault("sourceHandle", "bottom")
-            edge.setdefault("targetHandle", "top")
-            edge.setdefault("type", "step")
-            edge.setdefault("animated", True)
-            normalized_edges.append(edge)
+        # Process edges with default values
+        # normalized_edges = []
+        # for e in minimal_edges:
+        #     edge = dict(e)
+        #     edge.setdefault("sourceHandle", "bottom")
+        #     edge.setdefault("targetHandle", "top")
+        #     edge.setdefault("type", "step")
+        #     edge.setdefault("animated", True)
+        #     edge.setdefault("markerEnd", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18})
+        #     edge.setdefault("markerStart", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18, "orient": "auto-start-reverse"})
+        #     edge.setdefault("style", {"stroke": "#808080", "strokeWidth": 2, "end": True, "start": True})
+        #     normalized_edges.append(edge)
 
-        full_edges = [build_full_edge(e) for e in normalized_edges]
+        # from app.Methods.helpers import build_full_edge
+        # full_edges = [build_full_edge(e) for e in normalized_edges]
 
-        final_result = {
-            "nodes": positioned_nodes,
-            "edges": full_edges,
+        final_template = {
+            "nodes": minimal_nodes,
+            "edges": minimal_edges,
         }
+
+        # ── Generate Derivations and Details using helper function ───────────
+        # print("Generating Derivations and Details using getDerivationsAndDetails...")
+        
+        # Extract existing details if any (for preserving IDs)
+        existing_details = {}
+        
+        # Call the helper function to generate Derivations and Details
+        Derivations, Details = getDerivationsAndDetails(final_template, existing_details)
+        
+        # print(f"Generated {len(Derivations)} derivations and {len(Details)} details")
 
         # ── Store model in DB ──────────────────────────────────────────────
         from datetime import datetime
@@ -356,28 +405,16 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
         result = db.Models.insert_one(model_doc)
         model_id = str(result.inserted_id)
 
-        # ── Extract damage scenarios from LLM response directly ───────────
-        ds_block = tara_json.get("damage_scenarios", {})
-        llm_derivations = ds_block.get("Derivations", [])
-        llm_details = ds_block.get("Details", [])
-
-        # Fallback: derive from template if LLM didn't produce damage scenarios
-        if llm_derivations or llm_details:
-            Derivations = llm_derivations
-            Details = llm_details
-        else:
-            Derivations, Details = getDerivationsAndDetails(final_result)
-
-        # Store asset
+        # Store asset with template
         db.Assets.insert_one({
             "model_id":        model_id,
-            "template":        final_result,
+            "template":        final_template,
             "asset_name":      f"{system_name}-asset",
             "asset_properties": "",
             "Details":         Details,
         })
 
-        # Store damage scenarios
+        # Store damage scenarios with derivations and details
         db.Damage_scenarios.update_one(
             {"model_id": model_id, "type": "Derived"},
             {
@@ -391,20 +428,22 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
             upsert=True,
         )
 
-        node_count = len(positioned_nodes)
-        edge_count = len(full_edges)
-        deriv_count = len(Derivations)
-        ds_count = len(Details)
-        print(f"   Nodes         : {node_count}")
-        print(f"   Edges         : {edge_count}")
-        print(f"   Derivations   : {deriv_count}")
-        print(f"   Damage details: {ds_count}")
+        # node_count = len(positioned_nodes)
+        # edge_count = len(full_edges)
+        # deriv_count = len(Derivations)
+        # ds_count = len(Details)
+        # print(f"   Nodes         : {node_count}")
+        # print(f"   Edges         : {edge_count}")
+        # print(f"   Derivations   : {deriv_count}")
+        # print(f"   Damage details: {ds_count}")
 
         result_data = {
             "message":     "Template generated and stored successfully",
             "model_id":    model_id,
-            "template":    final_result,
+            "template":    final_template,
             "system_name": system_name,
+            "derivations": Derivations,
+            "details":     Details,
         }
 
         if standalone:
