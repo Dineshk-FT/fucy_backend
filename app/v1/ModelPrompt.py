@@ -1,6 +1,4 @@
 from flask import Blueprint, request, jsonify, current_app
-import google.generativeai as genai
-import os
 import ast
 import json
 import re
@@ -8,7 +6,9 @@ from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
 from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions,threat_type,safe_json_parse
+from app.v1.gemini.main import GeminiClient
 import random
+import os
 import uuid
 import string
 from collections import defaultdict
@@ -17,6 +17,15 @@ from bson import ObjectId
 import traceback
 from werkzeug.datastructures import MultiDict
 import time
+from app.v1.rag.main import (
+    retrieve_documents,
+    build_rag_context,
+    build_prompt_from_documents,
+    stamp_uuids,
+    crosslink_node_ids,
+    resolve_ecu,
+    build_enriched_query,
+)
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -26,10 +35,11 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+# Path to dataecu.json — adjust to match your project layout
+ECU_DB_PATH = os.getenv("ECU_DB_PATH", "datasets/dataecu.json")
 
 
 #1- Prompt template for label creation (inputs for the model)
@@ -72,9 +82,10 @@ def get_system_inputs():
         return jsonify({"error": "'systemName' is required in form data"}), 400
 
     try:
-        prompt = build_prompt(system_name, user_prompt)
-        response = model.generate_content(prompt)
-        content = response.text.strip()
+        docs = retrieve_documents(user_prompt, top_k=5)
+        prompt = build_prompt_from_documents(user_prompt, documents=docs)
+        response = gemini_client.generate_content(prompt)
+        content = gemini_client.get_text(response).strip()
 
         inputs = safe_json_parse(content)
         if not inputs:
@@ -91,189 +102,348 @@ def get_system_inputs():
 #2- Item definition prompt
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
-    """Generate ReactFlow template - can be called as route or function"""
+    """Generate ReactFlow template - can be called as route or function."""
     try:
         if not request_data:
             request_data = request
 
-        # Static fields
-        user_id = request.headers.get("user-id")
-        created_by = request_data.form.get("createdBy", "system")
-        system_name = request_data.form.get("systemName", "Test System")
+        # ── Parse request ──────────────────────────────────────────────────
+        if request.is_json:
+            data = request.get_json()
+            user_id      = request.headers.get("user-id")
+            created_by   = data.get("createdBy", "system")
+            system_name  = data.get("systemName", "Test System")
+            custom_prompt = data.get("itemDefinitionPrompt")
 
-        # Optional user-provided descriptive prompt (above data structure)
-        custom_prompt = request_data.form.get("itemDefinitionPrompt")
+            static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "modelId"}
+            dynamic_fields = {k: v for k, v in data.items() if k not in static_fields}
+        else:
+            user_id      = request.headers.get("user-id")
+            created_by   = request_data.form.get("createdBy", "system")
+            system_name  = request_data.form.get("systemName", "Test System")
+            custom_prompt = request_data.form.get("itemDefinitionPrompt")
 
-        # Dynamically collect all other form fields (excluding static + prompt)
-        static_fields = {"createdBy", "systemName", "prompt"}
-        dynamic_fields = {
-            key: request_data.form.get(key)
-            for key in request_data.form
-            if key not in static_fields
-        }
+            static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "modelId"}
+            dynamic_fields = {
+                key: request_data.form.get(key)
+                for key in request_data.form
+                if key not in static_fields
+            }
 
-        # Convert dynamic fields into prompt format
         dynamic_prompt_lines = "\n".join([
             f"{key.replace('_', ' ').title()}: {value}"
             for key, value in dynamic_fields.items()
         ])
 
-        # --- Default description (above Data structure) ---
-        default_description = """
-            You are an automotive cybersecurity engineer following ISO/SAE 21434 standards.  
-            Your task is to create a detailed **Item Definition** and an accompanying **System Diagram** for performing a Threat Analysis and Risk Assessment (TARA).  
-            The output must follow the structure defined in ISO/SAE 21434 Clause 9.4 (Item Definition) and should include:
-
-            1. **Item Name** - The name of the system or feature.
-            2. **Item Purpose** - The high-level purpose and intended functionality.
-            3. **Operational Description** - How the item operates, key functions, and operational scenarios.
-            4. **Boundaries of the Item** - What is inside and outside the scope (physical and logical boundaries).
-            5. **Interfaces** - All relevant physical, data, and network interfaces.
-            6. **Assumptions and Constraints** - Any limitations, regulations, or environmental conditions.
-            7. **Dependencies** - Dependencies on other systems or components.
-            8. **Stakeholders** - Relevant stakeholders (OEM, supplier, regulator, user, etc.).
-            9. **System Diagram** - A block diagram showing major components, interfaces, and external connections.
-
-            **Requirements for the System Diagram**:
-            - Clearly identify ECUs, sensors, actuators, communication buses, and external entities (e.g., cloud services, mobile apps).
-            - Use clear labels for each component and interface.
-            - Show data flows and connection types (wired, wireless, CAN, Ethernet, Bluetooth, etc.).
-            - Represent external systems and boundaries distinctly.
-
-            **Constraints:**
-            - Follow ISO/SAE 21434 terminology.
-            - Keep the description technology-neutral unless otherwise specified.
-            - Ensure the diagram supports later TARA steps such as asset identification, threat scenario development, and impact analysis.
-
-            Now, generate the Item Definition and System Diagram for the following automotive system:
-            """
-
-        # --- Mandatory Data structure section ---
-        data_structure_section = """
-            (For Data structure)
-            Include :
-            - Nodes must have: id, type ("default" or "group"), data.label, properties.
-            - Edges must have: id, type ("step"), source, target, sourceHandle, targetHandle, data.label, properties.
-            - A node's properties must be a list of one or more of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization. Properties must contain only one of the following: Integrity, Confidentiality, Authenticity, Availability, Non-repudiation, Authorization.
-
-            Constraints:
-            - If multiple related nodes exist, create possible group node to contain them.
-            - Do not include position information - positions will be calculated automatically.
-            - Specify parent-child relationships using parentId where applicable.
-
-            Example:
-            {
-            "nodes": [
-                {
-                "id": "1",
-                "type": "default",
-                "data": {"label": "BMU"},
-                "properties": ["Confidentiality"]
-                }
-            ],
-            "edges": [
-                {
-                "id": "e1-2",
-                "type": "step",
-                "source": "1",
-                "target": "2",
-                "sourceHandle": "bottom",
-                "targetHandle": "top",
-                "data": {"label": "CAN"},
-                "properties": ["Integrity"]
-                }
-            ]
-            }
-            """
-
-        # --- Final prompt assembly ---
-        prompt = f"""
-            Return ONLY valid JSON for a React Flow diagram for the system below:
-
-            {custom_prompt if custom_prompt else default_description}
-
-            System Name: {system_name}
-            {dynamic_prompt_lines}
-
-            {data_structure_section}
-            """
-
-        # Call Gemini
-        response = model.generate_content(prompt)
-        output = response.text.strip()
-        cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
-
-        # Parse JSON
-        try:
-    # Remove JS-style comments before parsing
-            cleaned_no_comments = re.sub(r'//.*', '', cleaned)
-            data = json.loads(cleaned_no_comments)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON from Gemini: {e}\nRaw: {cleaned}")
-
-        if 'templates' in data:
-            minimal_nodes = data['templates']['nodes']
-            minimal_edges = data['templates']['edges']
-        elif 'nodes' in data and 'edges' in data:
-            minimal_nodes = data['nodes']
-            minimal_edges = data['edges']
+        # ── Import RAG functions ───────────────────────────────────────────
+        from app.v1.rag.components import (
+            resolve_ecu as rag_resolve_ecu,
+            build_enriched_query as rag_build_enriched_query,
+            stamp_uuids as rag_stamp_uuids,
+            crosslink_node_ids as rag_crosslink_node_ids,
+            parse_and_fix as rag_parse_and_fix,
+        )
+        from app.v1.rag.ingest import load_all_documents
+        from app.v1.rag.pipeline import build_pipeline
+        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
+        from haystack.components.builders import PromptBuilder
+        from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
+        
+        # ── ECU resolution and enrichment ───────────────────────────────────
+        print(f"Resolving ECU for query: {system_name}")
+        
+        ecu_entry = rag_resolve_ecu(system_name)
+        if ecu_entry:
+            print(f"Matched ECU  : {ecu_entry['name']}")
+            print(f"Type         : {ecu_entry['type']}")
+            print(f"Asset hint   : {ecu_entry['hint'][:120]}...")
         else:
-            raise ValueError("Invalid response format from Gemini")
+            print("No dataecu.json match — using open-ended generation.")
 
-        # Build full template
-        full_nodes = [build_basic_node(n) for n in minimal_nodes]
-        positioned_nodes = calculate_node_positions(full_nodes)
-        full_edges = [build_full_edge(e) for e in minimal_edges]
+        # Build enriched LLM query with authoritative asset list
+        enriched_query = rag_build_enriched_query(system_name, ecu_entry)
+        
+        print("\n" + "="*80)
+        print("ENRICHED QUERY (for LLM):")
+        print("="*80)
+        print(enriched_query[:1000] + "..." if len(enriched_query) > 1000 else enriched_query)
+        print("="*80 + "\n")
 
-        final_result = {
-            "nodes": positioned_nodes,
-            "edges": full_edges
+        # ── Load documents and build pipeline ───────────────────────────────
+        print(f"Loading documents from Azure and building RAG pipeline...")
+        
+        # Load all documents from Azure
+        all_docs = load_all_documents()
+        
+        # Build the pipeline (this embeds documents and creates the pipeline)
+        pipeline, _ = build_pipeline(all_docs)
+        
+        # Retrieve documents using plain system_name for embedding
+        print(f"Retrieving documents for system: {system_name}")
+        
+        # Run the pipeline to get retrieval
+        retrieval_result = pipeline.run(
+            {
+                "text_embedder": {"text": system_name},
+                "prompt_builder": {"question": enriched_query},
+            },
+            include_outputs_from=["retriever"],
+        )
+        
+        retrieved_docs = retrieval_result["retriever"]["documents"]
+        print(f"Retrieved {len(retrieved_docs)} documents")
+        
+        # Print retrieved document sources
+        from collections import Counter
+        sources = Counter(d.meta.get('source') for d in retrieved_docs)
+        print(f"Retrieved document sources: {dict(sources)}")
+        
+        # ── Build prompt using YOUR template from prompt.py ─────────────────
+        print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
+        
+        prompt_builder = PromptBuilder(
+            template=TARA_PROMPT_TEMPLATE,
+            required_variables=["documents", "question"],
+        )
+        
+        prompt_result = prompt_builder.run(
+            documents=retrieved_docs,
+            question=enriched_query
+        )
+        
+        rag_prompt = prompt_result["prompt"]
+        
+        # print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
+        # print(f"RAG prompt length: {len(rag_prompt)} characters")
+        
+        # print("\n" + "="*80)
+        # print("RAG PROMPT (first 2000 chars):")
+        # print("="*80)
+        # print(rag_prompt[:2000])
+        # print("="*80 + "\n")
+
+        # ── Combine with custom prompt if provided ──────────────────────────
+        if custom_prompt:
+            enhanced_prompt = f"""
+System: {system_name}
+
+Additional Requirements: {custom_prompt}
+
+{rag_prompt}
+"""
+        else:
+            enhanced_prompt = rag_prompt
+
+        # Add dynamic field lines (extra form inputs)
+        if dynamic_prompt_lines:
+            enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+
+        # ── Save the final prompt for debugging ─────────────────────────────
+        # print("\n" + "="*80)
+        # print("FINAL PROMPT SENT TO GEMINI:")
+        # print("="*80)
+        # print(enhanced_prompt[:2000] + "..." if len(enhanced_prompt) > 2000 else enhanced_prompt)
+        # print("="*80)
+        # print(f"FINAL PROMPT LENGTH: {len(enhanced_prompt)} characters")
+        # print("="*80 + "\n")
+
+        # Save to file for inspection
+        try:
+            with open("backend_prompt.txt", "w", encoding="utf-8") as f:
+                f.write(enhanced_prompt)
+            print("✅ Prompt saved to backend_prompt.txt")
+        except Exception as e:
+            print(f"Could not save prompt to file: {e}")
+
+        # ── Call Gemini ────────────────────────────────────────────────────
+        print("Calling Gemini API...")
+        response = gemini_client.generate_content(enhanced_prompt)
+        output = gemini_client.get_text(response).strip()
+
+        # Print Gemini response
+        # print("\n" + "="*80)
+        # print("GEMINI RESPONSE (first 1000 chars):")
+        # print("="*80)
+        # print(output[:1000])
+        # print("="*80 + "\n")
+
+        # Clean markdown fences and JS-style comments
+        cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
+        cleaned = re.sub(r'//.*', '', cleaned)
+
+        # ── Parse JSON using RAG's parse_and_fix ───────────────────────────
+        tara_json = rag_parse_and_fix(cleaned)
+
+        if tara_json is None:
+            # Fallback to manual parsing
+            try:
+                tara_json = json.loads(cleaned)
+                print("✅ Successfully parsed JSON from Gemini (manual)")
+            except json.JSONDecodeError as e:
+                print(f"❌ JSON parse error: {e}")
+                print(f"Raw output: {cleaned[:500]}...")
+                raise ValueError(f"Invalid JSON from Gemini: {e}")
+
+        # ── Ensure UUID stamping and cross-linking ─────────────────────────
+        if "assets" in tara_json:
+            tara_json = rag_stamp_uuids(tara_json)
+            tara_json = rag_crosslink_node_ids(tara_json)
+
+        # ── Extract template (nodes + edges) ──────────────────────────────
+        template_data = None
+
+        if "assets" in tara_json and isinstance(tara_json["assets"], dict):
+            if "template" in tara_json["assets"]:
+                template_data = tara_json["assets"]["template"]
+            else:
+                template_data = tara_json["assets"]
+        elif "nodes" in tara_json and "edges" in tara_json:
+            template_data = tara_json
+        elif "templates" in tara_json and isinstance(tara_json["templates"], dict):
+            template_data = tara_json["templates"]
+        else:
+            for key, value in tara_json.items():
+                if isinstance(value, dict) and "nodes" in value and "edges" in value:
+                    template_data = value
+                    break
+
+        if not template_data or not isinstance(template_data, dict):
+            print(f"Unexpected response structure: {json.dumps(tara_json, indent=2)[:500]}")
+            raise ValueError("Invalid response format from Gemini - missing nodes/edges")
+
+        minimal_nodes = template_data.get("nodes", [])
+        minimal_edges = template_data.get("edges", [])
+
+        if not isinstance(minimal_nodes, list) or not isinstance(minimal_edges, list):
+            raise ValueError("Invalid response format from Gemini - nodes/edges must be lists")
+
+        print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
+
+        # ── Build full ReactFlow-ready template with enhanced node data ─────
+        # Process nodes to ensure they have all required fields
+        # processed_nodes = []
+        # for node in minimal_nodes:
+        #     processed_node = {
+        #         "id": node.get("id", str(uuid.uuid4())),
+        #         "type": node.get("type", "default"),
+        #         "parentId": node.get("parentId"),
+        #         "data": {
+        #             "label": node.get("data", {}).get("label", ""),
+        #             "description": node.get("data", {}).get("description", ""),
+        #             "style": {
+        #                 "backgroundColor": node.get("data", {}).get("style", {}).get("backgroundColor", "#dadada"),
+        #                 "borderColor": node.get("data", {}).get("style", {}).get("borderColor", "gray"),
+        #                 "borderStyle": "solid",
+        #                 "borderWidth": "2px",
+        #                 "color": "black",
+        #                 "fontFamily": "Inter",
+        #                 "fontSize": "12px",
+        #                 "fontWeight": 500,
+        #                 "height": node.get("data", {}).get("style", {}).get("height", 50),
+        #                 "width": node.get("data", {}).get("style", {}).get("width", 150)
+        #             }
+        #         },
+        #         "properties": node.get("properties", []),
+        #         "isAsset": node.get("isAsset", False),
+        #         "width": node.get("width", 150),
+        #         "height": node.get("height", 50),
+        #         "position": node.get("position", {"x": 0, "y": 0}),
+        #         "positionAbsolute": node.get("positionAbsolute", {"x": 0, "y": 0}),
+        #         "zIndex": node.get("zIndex", 0)
+        #     }
+        #     processed_nodes.append(processed_node)
+        
+        # Calculate node positions for better layout
+        # from app.Methods.helpers import calculate_node_positions
+        # positioned_nodes = calculate_node_positions(processed_nodes)
+
+        # Process edges with default values
+        # normalized_edges = []
+        # for e in minimal_edges:
+        #     edge = dict(e)
+        #     edge.setdefault("sourceHandle", "bottom")
+        #     edge.setdefault("targetHandle", "top")
+        #     edge.setdefault("type", "step")
+        #     edge.setdefault("animated", True)
+        #     edge.setdefault("markerEnd", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18})
+        #     edge.setdefault("markerStart", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18, "orient": "auto-start-reverse"})
+        #     edge.setdefault("style", {"stroke": "#808080", "strokeWidth": 2, "end": True, "start": True})
+        #     normalized_edges.append(edge)
+
+        # from app.Methods.helpers import build_full_edge
+        # full_edges = [build_full_edge(e) for e in normalized_edges]
+
+        final_template = {
+            "nodes": minimal_nodes,
+            "edges": minimal_edges,
         }
 
-        # Store model
+        # ── Generate Derivations and Details using helper function ───────────
+        # print("Generating Derivations and Details using getDerivationsAndDetails...")
+        
+        # Extract existing details if any (for preserving IDs)
+        existing_details = {}
+        
+        # Call the helper function to generate Derivations and Details
+        Derivations, Details = getDerivationsAndDetails(final_template, existing_details)
+        
+        # print(f"Generated {len(Derivations)} derivations and {len(Details)} details")
+
+        # ── Store model in DB ──────────────────────────────────────────────
+        from datetime import datetime
         current = datetime.now()
         model_doc = {
-            "name": system_name,
-            "template": [],
-            "created_by": created_by,
-            "created_at": current,
+            "name":         system_name,
+            "template":     [],
+            "created_by":   created_by,
+            "created_at":   current,
             "last_updated": current,
-            "user_id": user_id,
-            "status": 1,
-            "type": "model"
+            "user_id":      user_id,
+            "status":       1,
+            "type":         "model",
         }
         result = db.Models.insert_one(model_doc)
-        # print("result",result)
         model_id = str(result.inserted_id)
 
-        # Store asset
-        Derivations, Details = getDerivationsAndDetails(final_result)
+        # Store asset with template
         db.Assets.insert_one({
-            "model_id": model_id,
-            "template": final_result,
-            "asset_name": f"{system_name}-asset",
+            "model_id":        model_id,
+            "template":        final_template,
+            "asset_name":      f"{system_name}-asset",
             "asset_properties": "",
-            "Details": Details
+            "Details":         Details,
         })
 
+        # Store damage scenarios with derivations and details
         db.Damage_scenarios.update_one(
             {"model_id": model_id, "type": "Derived"},
             {
                 "$set": {
-                    "model_id": model_id,
-                    "type": "Derived",
+                    "model_id":    model_id,
+                    "type":        "Derived",
                     "Derivations": Derivations,
-                    "Details": Details
+                    "Details":     Details,
                 }
             },
-            upsert=True
+            upsert=True,
         )
 
+        # node_count = len(positioned_nodes)
+        # edge_count = len(full_edges)
+        # deriv_count = len(Derivations)
+        # ds_count = len(Details)
+        # print(f"   Nodes         : {node_count}")
+        # print(f"   Edges         : {edge_count}")
+        # print(f"   Derivations   : {deriv_count}")
+        # print(f"   Damage details: {ds_count}")
+
         result_data = {
-            "message": "Template generated and stored successfully",
-            "model_id": model_id,
-            "template": final_result,
-            "system_name": system_name
+            "message":     "Template generated and stored successfully",
+            "model_id":    model_id,
+            "template":    final_template,
+            "system_name": system_name,
+            "derivations": Derivations,
+            "details":     Details,
         }
 
         if standalone:
@@ -281,13 +451,16 @@ def generate_reactflow_template(standalone=False, request_data=None):
         return current_app.response_class(
             response=json.dumps(result_data, cls=JSONEncoder),
             status=201,
-            mimetype='application/json'
+            mimetype="application/json",
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         if standalone:
             raise e
         return jsonify({"error in item definition": str(e)}), 500
+
 
 #3 - Damage scenario creation
 def generate_object_id():
@@ -304,7 +477,7 @@ def create_damage_scenarios(standalone=False, request_data=None):
         model_id = req_data.form.get('modelId')
         system_name = req_data.form.get('systemName', '')
         template_raw = req_data.form.get('template', '{}')
-        user_prompt = req_data.form.get('damageScenarioPrompt', '')  # 👈 Optional user prompt
+        user_prompt = req_data.form.get('damageScenarioPrompt', '')  # Optional user prompt
 
         if not model_id:
             if standalone:
@@ -376,8 +549,8 @@ def create_damage_scenarios(standalone=False, request_data=None):
 
         print("DEBUG: Final Prompt Sent to Model:\n", prompt)
 
-        response = model.generate_content(prompt)
-        raw_output = response.text.strip()
+        response = gemini_client.generate_content(prompt)
+        raw_output = gemini_client.get_text(response).strip()
         print("DEBUG: Raw AI Output:", raw_output)
 
         cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
@@ -481,7 +654,6 @@ def create_threat_scenarios(model_id=None):
             "Details": threat_details
         }
 
-        # 🔄 Replace existing derived threat scenarios for this model_id
         db.Threat_scenarios.replace_one(
             {"model_id": model_id, "type": "derived"},
             threat_scenario_doc,
@@ -526,7 +698,6 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
     If user_prompt is provided, it replaces the intro part of the prompt.
     """
 
-    # Default intro part
     default_intro = f"""
         You are a cybersecurity expert. Based on the following related threats, generate a meaningful name and a concise description for a derived threat scenario. Do not use generic names like "Derived Threat Scenario".
 
@@ -534,11 +705,8 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
         {json.dumps(threat_group, indent=2)}
         """
 
-    # Use user prompt if provided, else fallback
     prompt_intro = user_prompt if user_prompt else default_intro
 
-    # Mandatory Data structure part
-  # Mandatory Data structure part
     prompt = f"""
         {prompt_intro}
 
@@ -550,40 +718,28 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
 
         Return only a JSON object with:
         - name: (string) → A short, meaningful, human-readable title for the derived threat scenario
-        - description: (string) → A concise natural-language summary of the combined threats. 
-        Do NOT return an array, object, or repeat the input JSON. 
-        The description should read like a human-written explanation, 
+        - description: (string) → A concise natural-language summary of the combined threats.
+        Do NOT return an array, object, or repeat the input JSON.
+        The description should read like a human-written explanation,
         not raw data.
     """
 
-    # Call Gemini
-    gemini_response = model.generate_content(prompt)
+    gemini_response = gemini_client.generate_content(prompt)
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
 
-        # Extract only the JSON part
         cleaned = extract_json_from_text(content_text)
-
-        # Remove control chars
         cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
-
-        # Repair common JSON issues
         cleaned = cleaned.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")  # remove code fences
-        cleaned = re.sub(r",\s*}", "}", cleaned)  # remove trailing commas before }
-        cleaned = re.sub(r",\s*]", "]", cleaned)  # remove trailing commas before ]
+            cleaned = cleaned.strip("`")
+        cleaned = re.sub(r",\s*}", "}", cleaned)
+        cleaned = re.sub(r",\s*]", "]", cleaned)
 
         parsed = json.loads(cleaned)
 
-        # 🛠 Ensure description is always a string
         description = parsed.get("description", "")
         if not isinstance(description, str):
-            # Convert list/dict → readable string
             if isinstance(description, list):
                 description = " ".join(str(item) for item in description)
             else:
@@ -603,7 +759,6 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
     details = []
 
     if name or description:
-        # 🛠 Guarantee string description
         if not isinstance(description, str):
             if isinstance(description, list):
                 description = " ".join(str(item) for item in description)
@@ -622,7 +777,6 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
         for group in grouped.values():
             result = generate_single_derived_scenario(group, user_prompt)
 
-            # 🛠 Guarantee string description
             description = result.get("description", "")
             if not isinstance(description, str):
                 if isinstance(description, list):
@@ -644,14 +798,12 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
             "type": "User-defined",
             "Details": details
         }
-        # 🔄 Replace existing document for this model_id OR insert if not exists
         db.Threat_scenarios.replace_one(
             {"model_id": model_id, "type": "User-defined"},
             document,
             upsert=True
         )
 
-        # Fetch the replaced document with _id
         saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
         saved_doc["_id"] = str(saved_doc["_id"])
         return saved_doc
@@ -695,7 +847,6 @@ def create_threat_and_derived_combined():
 
         print(f"\n=== [COMBINED API] STARTED for model {model_id} ===")
 
-        # 1️⃣ STEP 1: Threat Scenario Generation
         t1 = time.time()
         threat_response, status_code = create_threat_scenarios(model_id)
         print(f"[TIMING] Threat scenario generation took {time.time() - t1:.2f}s")
@@ -707,7 +858,6 @@ def create_threat_and_derived_combined():
         threat_data = threat_response.get_json()
         print(f"[DEBUG] Threat scenarios created: {len(threat_data.get('scenarios', {}).get('Details', []))}")
 
-        # Extract threat IDs
         threat_ids = []
         for threat in threat_data.get("scenarios", {}).get("Details", []):
             for item in threat.get("Details", []):
@@ -719,7 +869,6 @@ def create_threat_and_derived_combined():
                     })
         print(f"[DEBUG] Collected {len(threat_ids)} threatIds for derived generation")
 
-        # 2️⃣ STEP 2: Derived Threat Scenario Generation (AI Call)
         derived_response_json = None
         derived_status = 500
 
@@ -763,11 +912,10 @@ def create_threat_and_derived_combined():
     except Exception as e:
         print("[FATAL ERROR in combined API]:", str(e))
         traceback.print_exc()
-        return jsonify({"error": "Error in combined API", "details": str(e)}), 500  
-    
-    
-#5 - Attack Scenarion Creation
-# generate Attack Tree
+        return jsonify({"error": "Error in combined API", "details": str(e)}), 500
+
+
+#5 - Attack Scenario Creation
 def preprocess_threat_scenarios(threat_scenarios):
     """
     Flattens the Details in each threat scenario so Gemini can see scenario names and nodes clearly.
@@ -780,12 +928,12 @@ def preprocess_threat_scenarios(threat_scenarios):
             for d in detail.get("Details", []):
                 for prop in d.get("props", []):
                     processed.append({
-                        "rowId": row_id,                       # still keep rowId for damage link
+                        "rowId": row_id,
                         "scenario_name": d.get("name", ""),
                         "node": d.get("node", ""),
                         "nodeId": d.get("nodeId", ""),
                         "property": prop.get("name", ""),
-                        "threat_id": prop.get("id"),           # <-- use this instead of rowId
+                        "threat_id": prop.get("id"),
                         "threat_key": f"TS{prop.get('key', 0):03}"
                     })
     return processed
@@ -793,10 +941,7 @@ def preprocess_threat_scenarios(threat_scenarios):
 def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=None):
     """
     Given a list of threat_scenarios and a model_id, call Gemini to generate attack trees.
-    If user_prompt is provided, it replaces the default natural language instructions
-    but still keeps the same JSON data structure format.
     """
-    # --- Default Natural Language Prompt ---
     default_prompt = """
         You are an expert in cyber threat modeling. Given the following derived threat scenarios, select the top 2 most critical scenarios and generate attack trees for each.
         Each scenario includes:
@@ -814,7 +959,6 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
         Return the result in the following JSON format (one scene per scenario):
         """
 
-    # --- Data Structure Format Prompt ---
     data_structure_prompt = f"""
         (for Data structure)
         {{
@@ -871,17 +1015,12 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
         - Return ONLY valid JSON.
         """
 
-    # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
         cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
         return json.loads(cleaned)
     except Exception as e:
@@ -891,13 +1030,11 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
 @modelprompt.route('/v1/generate/attack-tree', methods=['POST'])
 def generate_attack_tree():
     try:
-        # 1. Get model_id from request
         model_id = request.form.get('modelId', '')
         user_prompt = request.form.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
-        # 2. Fetch all derived threat scenarios for this model_id
         threat_scenarios = list(
             db.Threat_scenarios.find({
                 "model_id": model_id,
@@ -908,37 +1045,30 @@ def generate_attack_tree():
         if not threat_scenarios:
             return jsonify({"error": "No derived threat scenarios found"}), 404
 
-        # 3. Preprocess for Gemini
         processed_scenarios = preprocess_threat_scenarios(threat_scenarios)
 
-        # 4. Generate attack trees using Gemini
         try:
             attack_tree_data = generate_attack_trees_with_gemini(processed_scenarios, model_id, user_prompt)
         except Exception as e:
             return jsonify({"error": f"Failed to generate attack trees: {str(e)}"}), 500
 
-        # 5. Save all scenes into a single document in DB
         try:
             raw_scenes = attack_tree_data.get("scenes", [])
             scenes = []
 
             for scene in raw_scenes:
                 structured_templates = structure_attack_tree_templates(
-                scene.get("templates", {}),
-                processed_scenarios=processed_scenarios
-            )
-
+                    scene.get("templates", {}),
+                    processed_scenarios=processed_scenarios
+                )
 
                 scenes.append({
-                "ID": scene.get("ID"),
-                "Name": scene.get("Name"),
-                "threat_id": scene.get("threat_id"),   # now this comes from props id
-                "templates": structured_templates
-            })
+                    "ID": scene.get("ID"),
+                    "Name": scene.get("Name"),
+                    "threat_id": scene.get("threat_id"),
+                    "templates": structured_templates
+                })
 
-
-                # print("scenes", scenes)
-                # return jsonify(scenes), 200
             existing_doc = db.Attacks.find_one({"model_id": model_id, "type": "attack_trees"})
 
             if existing_doc:
@@ -955,14 +1085,13 @@ def generate_attack_tree():
         except Exception as e:
             return jsonify({"error": f"Failed to store attack trees in DB: {str(e)}"}), 500
 
-        # 6. Return the generated attack trees
         return jsonify(attack_tree_data), 200
 
     except Exception as e:
         return jsonify({"error in attack tree": str(e)}), 500
 
+
 # Attacks
-# Map ratings from AttackTableoptions for quick lookup
 RATING_MAP = {
     category: {opt["value"]: opt["rating"] for opt in options}
     for category, options in AttackTableoptions.items()
@@ -975,7 +1104,6 @@ def calculate_attack_feasibility(scene):
         value = scene.get(field)
         total_rating += RATING_MAP[field].get(value, 0)
 
-    # Match frontend logic
     if 0 <= total_rating <= 13:
         return "High"
     elif 14 <= total_rating <= 19:
@@ -986,15 +1114,10 @@ def calculate_attack_feasibility(scene):
         return "Very low"
 
 
-# Attacks creattion
 def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_prompt=None):
     """
     Given derived threat scenarios, generate possible attacks for each scenario using Gemini.
-    Returns parsed JSON without rating; rating is computed here.
-    If user_prompt is provided, it replaces the default instructions,
-    while the JSON data structure format remains unchanged.
     """
-
     options = {
         "Elapsed Time": [opt["value"] for opt in AttackTableoptions["Elapsed Time"]],
         "Expertise": [opt["value"] for opt in AttackTableoptions["Expertise"]],
@@ -1003,14 +1126,12 @@ def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_promp
         "Equipment": [opt["value"] for opt in AttackTableoptions["Equipment"]],
     }
 
-    # --- Default Instructions ---
     default_prompt = f"""
-        You are an expert in cyber threat analysis.  
+        You are an expert in cyber threat analysis.
         For each of the following derived threat scenarios, create one realistic possible attack.
 
         """
 
-    # --- Data Structure Prompt ---
     data_structure_prompt = f"""
         (for Data structure)
         Rules:
@@ -1046,31 +1167,26 @@ def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_promp
         {json.dumps(threat_scenarios, indent=2)}
         """
 
-    # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
         cleaned = re.sub(r"```[a-z]*", "", content_text).strip().strip("`")
         return json.loads(cleaned)
     except Exception as e:
         raise ValueError(f"Failed to parse Gemini attack response: {str(e)}")
+
+
 @modelprompt.route('/v1/generate/attacks', methods=['POST'])
 def generate_attacks():
     try:
-        # 1. Get model_id
         model_id = request.form.get('modelId', '')
         user_prompt = request.form.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
-        # 2. Fetch derived threat scenarios
         threat_scenarios = list(
             db.Threat_scenarios.find({
                 "model_id": model_id,
@@ -1080,17 +1196,12 @@ def generate_attacks():
         if not threat_scenarios:
             return jsonify({"error": "No derived threat scenarios found"}), 404
 
-        # 3. Preprocess for Gemini
         processed_scenarios = preprocess_threat_scenarios(threat_scenarios)
-
-        # 4. Generate attacks (no rating yet)
         attack_data = generate_possible_attacks_with_gemini(processed_scenarios, model_id, user_prompt)
 
-        # 5. Compute ratings
         for scene in attack_data.get("scenes", []):
             scene["Attack Feasibilities Rating"] = calculate_attack_feasibility(scene)
 
-        # 6. Save to DB
         scenes = attack_data.get("scenes", [])
         existing_doc = db.Attacks.find_one({"model_id": model_id, "type": "attack"})
         if existing_doc:
@@ -1105,22 +1216,16 @@ def generate_attacks():
                 "scenes": scenes
             })
 
-        # 7. Return results
         return jsonify(attack_data), 200
 
     except Exception as e:
         return jsonify({"error in attacks": str(e)}), 500
 
 
-# convertion of events to attack and requirements
 def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None):
     """
     Given attack_trees and model_id, call Gemini to filter out possible attack events.
-    If user_prompt is provided, it replaces the default natural language instructions,
-    while the JSON data structure format remains unchanged.
     """
-
-    # --- Default Natural Language Prompt ---
     default_prompt = f"""
         You are an expert in automotive cyber threat modeling (ISO/SAE 21434).
 
@@ -1137,7 +1242,6 @@ def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None)
         - Return ONLY valid JSON in the exact format:
         """
 
-    # --- Data Structure Prompt ---
     data_structure_prompt = """
         (for Data structure)
         [
@@ -1154,19 +1258,13 @@ def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None)
         Here are the attack_trees:
         """ + json.dumps(attack_trees, indent=2)
 
-    # Use user prompt if provided, otherwise fallback to default
     final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-    gemini_response = model.generate_content(final_prompt)
+    gemini_response = gemini_client.generate_content(final_prompt)
 
     try:
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        content_text = gemini_client.get_text(gemini_response)
 
-        # Extract JSON array in case Gemini adds explanation
         match = re.search(r"\[\s*\{.*\}\s*\]", content_text, re.DOTALL)
         if not match:
             raise ValueError(f"No JSON array found in Gemini output:\n{content_text}")
@@ -1175,21 +1273,22 @@ def filter_possible_events_with_gemini(attack_trees, model_id, user_prompt=None)
         return json.loads(json_str)
 
     except Exception as e:
-        raise ValueError(f"Failed to parse Gemini possible events: {str(e)}")   
+        raise ValueError(f"Failed to parse Gemini possible events: {str(e)}")
+
+
 def convert_possible_events(possible_events, model_id):
     """
     Converts possible event nodes into Attacks (type: attack)
     and Cybersecurity Requirements (type: cybersecurity_requirements).
     """
     for evt in possible_events:
-        event_id = evt["event_id"]
-        event_name = evt["event_name"]
-        attack_scene_id = evt["attack_tree_scene_id"]
+        event_id         = evt["event_id"]
+        event_name       = evt["event_name"]
+        attack_scene_id  = evt["attack_tree_scene_id"]
         attack_scene_name = evt["attack_tree_scene_name"]
-        threat_id = evt.get("threat_id")
-        threat_key = evt.get("threat_key")
+        threat_id        = evt.get("threat_id")
+        threat_key       = evt.get("threat_key")
 
-        # ---- Insert into Attacks ----
         existing_attack = db.Attacks.find_one({
             "model_id": model_id,
             "type": "attack",
@@ -1213,7 +1312,6 @@ def convert_possible_events(possible_events, model_id):
                 upsert=True
             )
 
-        # ---- Insert into Cybersecurity Requirements ----
         existing_cyber = db.Cybersecurity.find_one({
             "model_id": model_id,
             "type": "cybersecurity_requirements",
@@ -1235,6 +1333,7 @@ def convert_possible_events(possible_events, model_id):
                 upsert=True
             )
 
+
 @modelprompt.route('/v1/convert/possible-events', methods=['POST'])
 def convert_possible_events_from_attack_trees():
     try:
@@ -1243,24 +1342,20 @@ def convert_possible_events_from_attack_trees():
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
-        # Get attack_trees for this model
         attack_trees_doc = db.Attacks.find_one({"model_id": model_id, "type": "attack_trees"})
         if not attack_trees_doc:
             return jsonify({"error": "No attack_trees found"}), 404
 
         attack_trees = attack_trees_doc.get("scenes", [])
-
-        # Ask Gemini to filter possible events
         possible_events = filter_possible_events_with_gemini(attack_trees, model_id, user_prompt)
-
-        # Convert to Attacks + Cybersecurity Requirements
         convert_possible_events(possible_events, model_id)
 
         return jsonify({"message": "Possible events converted successfully", "converted": possible_events}), 200
 
     except Exception as e:
-        return jsonify({"error in converting possible events" : str(e)}), 500
-    
+        return jsonify({"error in converting possible events": str(e)}), 500
+
+
 # Full attack scenario pipeline
 @modelprompt.route('/v1/generate/full-attack-scenario', methods=['POST'])
 def generate_full_attack_pipeline():
@@ -1271,14 +1366,12 @@ def generate_full_attack_pipeline():
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
-        # 1️⃣ Call generate_attack_tree
         attack_tree_response, tree_status = generate_attack_tree()
         if tree_status != 200:
-            return attack_tree_response, tree_status  # stop if failed
+            return attack_tree_response, tree_status
 
         attack_tree_data = attack_tree_response.get_json()
 
-        # 2️⃣ Call generate_attacks
         with current_app.test_request_context(
             data={"modelId": model_id, "attackscenarioPrompt": user_prompt}
         ):
@@ -1288,7 +1381,6 @@ def generate_full_attack_pipeline():
 
         attacks_data = attacks_response.get_json()
 
-        # 3️⃣ Call convert_possible_events_from_attack_trees
         with current_app.test_request_context(
             data={"modelId": model_id, "attackscenarioPrompt": user_prompt}
         ):
@@ -1307,6 +1399,7 @@ def generate_full_attack_pipeline():
 
     except Exception as e:
         return jsonify({"error in full attack pipeline": str(e)}), 500
+
 
 #6 - Cybersecurity Generation
 def extract_json_block(text):
@@ -1328,6 +1421,7 @@ def extract_json_block(text):
                     return text[start:i + 1]
     return text  # Fallback
 
+
 def generate_cybersecurity_artifact_with_gemini(artifact_type, system_name):
     prompt_templates = {
         "cybersecurity_requirements": (
@@ -1348,36 +1442,26 @@ def generate_cybersecurity_artifact_with_gemini(artifact_type, system_name):
             "Return ONLY valid JSON in the format: { \"scenes\": [ { \"ID\": \"<uuid>\", \"Name\": \"<claim name>\", \"Description\": \"<description>\", \"threat_id\": null } ] }. "
             "Do NOT include any explanation or extra text. The top-level key must be \"scenes\"."
         ),
-    }    
+    }
 
     if artifact_type not in prompt_templates:
         raise ValueError(f"Unknown artifact type: {artifact_type}")
 
     prompt = prompt_templates[artifact_type].format(system_name=system_name)
-    gemini_response = model.generate_content(prompt)
-    content_text = (
-        gemini_response.text
-        if hasattr(gemini_response, 'text')
-        else gemini_response.candidates[0].content.parts[0].text
-    )
-    # print(f"Gemini Output for {artifact_type}:", content_text)  # Debug log
+    gemini_response = gemini_client.generate_content(prompt)
+    content_text = gemini_client.get_text(gemini_response)
     cleaned = re.sub(r"[a-z]*", "", content_text).strip().strip("`")
     cleaned = extract_json_block(cleaned)
-    # print("Gemini Output (cleaned):", cleaned)
     try:
         return json.loads(cleaned)
     except Exception as e:
         print("Gemini Output (cleaned):", cleaned)
-        # Return the raw output in the error for easier debugging
 
 
 @modelprompt.route('/v1/generate/cybersecurity-artifacts', methods=['POST'])
 def generate_cybersecurity_artifacts():
     """
-    Generate and save cybersecurity requirements, controls, goals, and claims
-    for a given modelId and systemName, each stored as a document in db.Cybersecurity.
-    If user_prompt is provided, it replaces the default natural language instructions,
-    while the JSON data structure format remains unchanged.
+    Generate and save cybersecurity requirements, controls, goals, and claims.
     """
     try:
         model_id = request.form.get('modelId', '')
@@ -1387,15 +1471,13 @@ def generate_cybersecurity_artifacts():
         if not model_id or not system_name:
             return jsonify({"error": "Missing modelId or systemName"}), 400
 
-        # --- Default Instructions ---
         default_prompt = f"""
             You are an expert in cybersecurity engineering (ISO/SAE 21434).
-            Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals, 
+            Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals,
             and cybersecurity_claims for the system '{system_name}'.
             Return ONLY valid JSON in the format below (no explanation or extra text):
             """
 
-        # --- Data Structure Format ---
         data_structure_prompt = """
             (for Data structure)
             {
@@ -1417,15 +1499,10 @@ def generate_cybersecurity_artifacts():
             - Do NOT include any explanation or extra text.
             """
 
-        # Use user prompt if provided, otherwise fallback to default
         final_prompt = (user_prompt or default_prompt) + data_structure_prompt
 
-        gemini_response = model.generate_content(final_prompt)
-        content_text = (
-            gemini_response.text
-            if hasattr(gemini_response, 'text')
-            else gemini_response.candidates[0].content.parts[0].text
-        )
+        gemini_response = gemini_client.generate_content(final_prompt)
+        content_text = gemini_client.get_text(gemini_response)
 
         cleaned = content_text.strip().strip("`").strip("json").strip()
         cleaned = extract_json_block(cleaned)
@@ -1456,32 +1533,27 @@ def generate_cybersecurity_artifacts():
                 "scenes": scenes
             }
 
-            # 💾 Save to database
             result = db.Cybersecurity.insert_one(doc)
-            doc["_id"] = str(result.inserted_id)  # Convert ObjectId to string
+            doc["_id"] = str(result.inserted_id)
             response[artifact_type] = doc
 
         return jsonify(response), 200
 
     except Exception as e:
         return jsonify({"error in generate_cybersecurity": str(e)}), 500
-    
-# Risk Tremenet creation
+
+
+# Risk Treatment creation
 @modelprompt.route("/v1/generate/generate-risk-treatments", methods=["POST"])
 def auto_generate_risk_treatments():
     """
-    Automatically generates all risk treatments for a given modelId
-    using the stored Threat_scenarios collection.
-
-    Expected form-data:
-      modelId: <model_id>
+    Automatically generates all risk treatments for a given modelId.
     """
     try:
         model_id = request.form.get("modelId")
         if not model_id:
             return jsonify({"error": "modelId is required"}), 400
 
-        # 🔍 Fetch threat scenarios for this model
         threat_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "derived"})
         if not threat_doc:
             return jsonify({"error": f"No threat scenarios found for model {model_id}"}), 404
@@ -1494,12 +1566,12 @@ def auto_generate_risk_treatments():
         skipped_count = 0
 
         for threat in details_list:
-            damage_id = threat.get("rowId")
+            damage_id   = threat.get("rowId")
             damage_name = threat.get("damage_name")
-            damage_key = threat.get("id")  # e.g., DS001
+            damage_key  = threat.get("id")
 
             for item in threat.get("Details", []):
-                node_id = item.get("nodeId")
+                node_id   = item.get("nodeId")
                 node_name = item.get("node")
 
                 for prop in item.get("props", []):
@@ -1511,7 +1583,6 @@ def auto_generate_risk_treatments():
 
                     label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
 
-                    # 🚀 Use existing API logic via test request context
                     with current_app.test_request_context(
                         method="POST",
                         data={
@@ -1543,10 +1614,8 @@ def auto_generate_risk_treatments():
 # 7 - Generate Full Model
 @modelprompt.route('/v1/generate/full-model', methods=['POST'])
 def generate_full_model():
-    # try:
         # Generate template
         template_response = generate_reactflow_template(standalone=True, request_data=request)
-        # print("Template Response:", template_response)
         scenario_request = {
             'modelId': template_response['model_id'],
             'systemName': template_response['system_name'],
@@ -1556,7 +1625,7 @@ def generate_full_model():
 
         # Generate damage scenarios
         scenarios_response = create_damage_scenarios(
-            standalone=True, 
+            standalone=True,
             request_data=type('', (), {'form': scenario_request})()
         )
         scenarios_data = scenarios_response.get_json() if hasattr(scenarios_response, 'get_json') else scenarios_response
@@ -1566,22 +1635,19 @@ def generate_full_model():
         threat_response_obj, _ = threat_response if isinstance(threat_response, tuple) else (threat_response, None)
         threat_data = threat_response_obj.get_json()
 
-        # risk treatment
+        # Risk treatment
         for threat in threat_data.get("scenarios", {}).get("Details", []):
-            damage_id = threat.get("rowId")
+            damage_id   = threat.get("rowId")
             damage_name = threat.get("damage_name")
-            damage_key = threat.get("id")  # e.g., DS001, DS002
+            damage_key  = threat.get("id")
 
             for item in threat.get("Details", []):
-                node_id = item.get("nodeId")
+                node_id   = item.get("nodeId")
                 node_name = item.get("name")
 
                 for prop in item.get("props", []):
-                    # Use threat_type mapper for STRIDE category
                     stride_category = threat_type(prop.get("name", ""))
                     threat_key = f"TS{prop['key']:03}"
-
-                    # Build consistent label
                     label = f"[{threat_key}] {stride_category} of {node_name} leads to {damage_name} [{damage_key}]"
 
                     with current_app.test_request_context(
@@ -1596,8 +1662,6 @@ def generate_full_model():
                         }
                     ):
                         add_risk_treatment()
-
-
 
         # Prepare threatIds for derived threat scenario generation
         threat_ids = []
@@ -1617,7 +1681,7 @@ def generate_full_model():
             user_prompt=request.form.get('threatScenarioPrompt', '')
         )
 
-        # Generate attack trees via Flask route
+        # Generate attack trees
         with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id'], "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')}):
             attack_response = generate_attack_tree()
             attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
@@ -1625,12 +1689,12 @@ def generate_full_model():
         with current_app.test_request_context(
             method='POST',
             data={
-                "modelId":template_response['model_id'],
+                "modelId": template_response['model_id'],
                 "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
             }
         ):
             possible_attacks = convert_possible_events_from_attack_trees()
-        # Generate cybersecurity artifacts via test request context
+
         with current_app.test_request_context(
             method='POST',
             data={
@@ -1640,31 +1704,24 @@ def generate_full_model():
             }
         ):
             cyber_response = generate_cybersecurity_artifacts()
-            # cyber_data = cyber_response.get_json() if hasattr(cyber_response, 'get_json') else {}
 
         with current_app.test_request_context(
             method='POST',
             data={
-                "modelId":template_response['model_id'],
+                "modelId": template_response['model_id'],
                 "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')
             }
         ):
             attacks = generate_attacks()
-            # attack_data = attacks.get_json() if hasattr(attacks, 'get_json') else {}
 
         return current_app.response_class(
             response=json.dumps({
-                "message":"Model Generated Successfully",
+                "message": "Model Generated Successfully",
                 "model": template_response,
-                # "attacks": attacks,
-                # "threat_data": threat_data,
             }, cls=JSONEncoder),
             status=201,
             mimetype='application/json'
         )
-
-    # except Exception as e:
-    #     return jsonify({"error in generating model": str(e)}), 500
 
 
 def clean_control_chars(s):
