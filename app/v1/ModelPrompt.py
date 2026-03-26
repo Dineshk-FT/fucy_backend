@@ -135,7 +135,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             for key, value in dynamic_fields.items()
         ])
 
-        # ── Import RAG functions (lazy import to avoid circular imports) ───
+        # ── Import RAG functions ───────────────────────────────────────────
         from app.v1.rag.components import (
             resolve_ecu as rag_resolve_ecu,
             build_enriched_query as rag_build_enriched_query,
@@ -144,13 +144,13 @@ def generate_reactflow_template(standalone=False, request_data=None):
             parse_and_fix as rag_parse_and_fix,
         )
         from app.v1.rag.ingest import load_all_documents
-        from app.v1.rag.pipeline import build_pipeline, run_query
-        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
+        from app.v1.rag.pipeline import build_pipeline
+        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE  # ← YOUR PROMPT TEMPLATE
+        from haystack.components.builders import PromptBuilder
         
-        # ── v3.0: ECU resolution (using your local dataecu.json) ────────────
+        # ── ECU resolution ──────────────────────────────────────────────────
         print(f"Resolving ECU for query: {system_name}")
         
-        # FIX: Remove the second argument - resolve_ecu only takes one parameter
         ecu_entry = rag_resolve_ecu(system_name)
         if ecu_entry:
             print(f"Matched ECU  : {ecu_entry['name']}")
@@ -161,8 +161,14 @@ def generate_reactflow_template(standalone=False, request_data=None):
 
         # Build enriched LLM query (includes authoritative asset list when matched)
         enriched_query = rag_build_enriched_query(system_name, ecu_entry)
+        
+        print("\n" + "="*80)
+        print("ENRICHED QUERY (for LLM):")
+        print("="*80)
+        print(enriched_query)
+        print("="*80 + "\n")
 
-        # ── v3.0: RAG retrieval — load documents and build pipeline ────────
+        # ── Load documents and build pipeline ───────────────────────────────
         print(f"Loading documents from Azure and building RAG pipeline...")
         
         # Load all documents from Azure
@@ -173,31 +179,47 @@ def generate_reactflow_template(standalone=False, request_data=None):
         
         # Retrieve documents using plain system_name for embedding
         print(f"Retrieving documents for system: {system_name}")
-        result = pipeline.run(
+        
+        # Run the pipeline to get retrieval - need to pass question to avoid errors
+        retrieval_result = pipeline.run(
             {
                 "text_embedder": {"text": system_name},
-                "prompt_builder": {"question": enriched_query},
+                "prompt_builder": {"question": enriched_query},  # Pass question to satisfy pipeline
             },
             include_outputs_from=["retriever"],
         )
         
-        retrieved_docs = result["retriever"]["documents"]
+        retrieved_docs = retrieval_result["retriever"]["documents"]
         print(f"Retrieved {len(retrieved_docs)} documents")
         
-        # Get the RAG prompt
-        rag_prompt = result["llm"]["replies"][0] if result["llm"]["replies"] else ""
+        # Print retrieved document sources
+        from collections import Counter
+        sources = Counter(d.meta.get('source') for d in retrieved_docs)
+        print(f"Retrieved document sources: {dict(sources)}")
         
-        # If the pipeline didn't generate, build the prompt manually
-        if not rag_prompt:
-            from haystack.components.builders import PromptBuilder
-            prompt_builder = PromptBuilder(
-                template=TARA_PROMPT_TEMPLATE,
-                required_variables=["documents", "question"],
-            )
-            prompt_result = prompt_builder.run(documents=retrieved_docs, question=enriched_query)
-            rag_prompt = prompt_result["prompt"]
+        # ── Build prompt using YOUR template from prompt.py ─────────────────
+        print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
+        
+        prompt_builder = PromptBuilder(
+            template=TARA_PROMPT_TEMPLATE,  # ← YOUR PROMPT TEMPLATE
+            required_variables=["documents", "question"],
+        )
+        
+        prompt_result = prompt_builder.run(
+            documents=retrieved_docs,
+            question=enriched_query  # ← Pass the enriched query with asset list
+        )
+        
+        rag_prompt = prompt_result["prompt"]
         
         print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
+        print(f"RAG prompt length: {len(rag_prompt)} characters")
+        
+        print("\n" + "="*80)
+        print("RAG PROMPT (first 2000 chars):")
+        print("="*80)
+        print(rag_prompt[:2000])
+        print("="*80 + "\n")
 
         # Optionally layer in custom_prompt
         if custom_prompt:
@@ -217,10 +239,34 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
         if dynamic_prompt_lines:
             enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
 
+        # ── Print the FINAL prompt that will be sent to Gemini ───────────────
+        print("\n" + "="*80)
+        print("FINAL PROMPT SENT TO GEMINI:")
+        print("="*80)
+        print(enhanced_prompt)
+        print("="*80)
+        print(f"FINAL PROMPT LENGTH: {len(enhanced_prompt)} characters")
+        print("="*80 + "\n")
+
+        # Also save to file for inspection
+        try:
+            with open("backend_prompt.txt", "w", encoding="utf-8") as f:
+                f.write(enhanced_prompt)
+            print("✅ Prompt saved to backend_prompt.txt")
+        except Exception as e:
+            print(f"Could not save prompt to file: {e}")
+
         # ── Call Gemini ────────────────────────────────────────────────────
         print("Calling Gemini API...")
         response = gemini_client.generate_content(enhanced_prompt)
         output = gemini_client.get_text(response).strip()
+
+        # Print Gemini response
+        print("\n" + "="*80)
+        print("GEMINI RESPONSE (first 1000 chars):")
+        print("="*80)
+        print(output[:1000])
+        print("="*80 + "\n")
 
         # Clean markdown fences and JS-style comments
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
@@ -375,8 +421,8 @@ Based on the cybersecurity knowledge provided below, generate a threat model:
         if standalone:
             raise e
         return jsonify({"error in item definition": str(e)}), 500
-    
-    
+
+
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
