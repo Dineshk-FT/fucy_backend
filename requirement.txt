@@ -8,8 +8,9 @@ Flask-Cors==4.0.1
 Flask-PyMongo==2.3.0
 Flask-Mail==0.10.0
 google-generativeai==0.8.4
-haystack-ai>=2.24.0
-google-ai-haystack  # This is the actual package name for the Google AI integration
+haystack-ai>=2.24.1
+google-ai-haystack
+sentence-transformers>=3.0.0
 gunicorn==22.0.0
 itsdangerous==2.2.0
 Jinja2==3.1.4
