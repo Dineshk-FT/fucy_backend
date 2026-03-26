@@ -8,8 +8,7 @@ Flask-Cors==4.0.1
 Flask-PyMongo==2.3.0
 Flask-Mail==0.10.0
 google-generativeai==0.8.4
-haystack-ai==2.24.1
-haystack-integrations-google-ai==2.24.1
+haystack-ai[google-ai]==2.24.1
 gunicorn==22.0.0
 itsdangerous==2.2.0
 Jinja2==3.1.4
