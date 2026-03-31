@@ -54,15 +54,23 @@ def get_damage_scene():
         risk_threat_ids = set()
         if risk_treatment and "Details" in risk_treatment:
             risk_threat_ids = {
-                detail["threat_id"] for detail in risk_treatment["Details"]
+                detail.get("threat_id", detail.get("_id", "")) 
+                for detail in risk_treatment["Details"]
+                if detail.get("threat_id") or detail.get("_id")
             }
 
         # Process only "Derived" types
         for item in data_list:
             if item.get("type") == "Derived" and "Details" in item:
                 for detail in item["Details"]:
-                    for prop in detail["props"]:
-                        prop["is_risk_added"] = prop["id"] in risk_threat_ids
+                    # Check for cyberLosses (which is the correct field name)
+                    if "cyberLosses" in detail:
+                        for loss in detail["cyberLosses"]:
+                            loss["is_risk_added"] = loss.get("id") in risk_threat_ids
+                    # Also check for props (backward compatibility)
+                    elif "props" in detail:
+                        for prop in detail["props"]:
+                            prop["is_risk_added"] = prop.get("id") in risk_threat_ids
 
         # Return results or error message if no documents are found
         if data_list:
@@ -74,8 +82,9 @@ def get_damage_scene():
             )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/v1/add/damage_scenario", methods=["POST"], endpoint="add_damage_scenario")
 def add_damage_scenario():

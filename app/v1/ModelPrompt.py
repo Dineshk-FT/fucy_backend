@@ -291,7 +291,7 @@ Additional Requirements: {custom_prompt}
 
         # ── Extract template (nodes + edges) ──────────────────────────────
         template_data = None
-
+        # print ("Extracting template data from Gemini response...", tara_json)
         if "assets" in tara_json and isinstance(tara_json["assets"], dict):
             if "template" in tara_json["assets"]:
                 template_data = tara_json["assets"]["template"]
@@ -469,15 +469,46 @@ def generate_object_id():
 
 # Wrapper Flask endpoint
 @modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
-def create_damage_scenarios(standalone=False, request_data=None):
-    """Core function to generate damage scenarios (can be called standalone or as route)"""
+def create_damage_scenarios_with_rag(standalone=False, request_data=None):
+    """Generate damage scenarios using RAG-enhanced prompts - stores as User-defined type"""
     try:
-        req_data = request_data if request_data else request
+        # Match item definition's request handling exactly
+        if not request_data:
+            request_data = request
 
-        model_id = req_data.form.get('modelId')
-        system_name = req_data.form.get('systemName', '')
-        template_raw = req_data.form.get('template', '{}')
-        user_prompt = req_data.form.get('damageScenarioPrompt', '')  # Optional user prompt
+        # Parse request like item definition
+        if request.is_json:
+            data = request.get_json()
+            model_id = data.get("modelId")
+            system_name = data.get("systemName", "")
+            template_raw = data.get("template", "{}")
+            user_prompt = data.get("damageScenarioPrompt", "")
+            custom_prompt = data.get("itemDefinitionPrompt", "")
+            
+            # Handle dynamic fields
+            static_fields = {"modelId", "systemName", "template", "damageScenarioPrompt", "itemDefinitionPrompt"}
+            dynamic_fields = {k: v for k, v in data.items() if k not in static_fields}
+        else:
+            # Handle form data
+            model_id = request_data.form.get("modelId")
+            system_name = request_data.form.get("systemName", "")
+            template_raw = request_data.form.get("template", "{}")
+            user_prompt = request_data.form.get("damageScenarioPrompt", "")
+            custom_prompt = request_data.form.get("itemDefinitionPrompt", "")
+            
+            # Handle dynamic fields
+            static_fields = {"modelId", "systemName", "template", "damageScenarioPrompt", "itemDefinitionPrompt"}
+            dynamic_fields = {
+                key: request_data.form.get(key)
+                for key in request_data.form
+                if key not in static_fields
+            }
+
+        # Build dynamic prompt lines
+        dynamic_prompt_lines = "\n".join([
+            f"{key.replace('_', ' ').title()}: {value}"
+            for key, value in dynamic_fields.items()
+        ])
 
         if not model_id:
             if standalone:
@@ -487,86 +518,293 @@ def create_damage_scenarios(standalone=False, request_data=None):
         # Parse template safely
         try:
             template = json.loads(template_raw) if template_raw else {}
-        except json.JSONDecodeError:
-            return jsonify({"error": "Invalid template JSON"}), 400
+        except json.JSONDecodeError as e:
+            return jsonify({"error": "Invalid template JSON", "details": str(e)}), 400
 
-        print("DEBUG: Parsed template:", template)
+        print(f"DEBUG: model_id = {model_id}")
+        print(f"DEBUG: system_name = {system_name}")
+        print(f"DEBUG: template nodes = {len(template.get('nodes', []))}")
 
-        # Build default prompt
-        default_prompt = f"""
-            Generate exactly 2 damage scenarios for the '{system_name}' system in JSON format.
+        # ── RAG Setup (same as item definition) ───────────────────────────────
+        from app.v1.rag.components import (
+            resolve_ecu as rag_resolve_ecu,
+            build_enriched_query as rag_build_enriched_query,
+            stamp_uuids as rag_stamp_uuids,
+            crosslink_node_ids as rag_crosslink_node_ids,
+            parse_and_fix as rag_parse_and_fix,
+        )
+        from app.v1.rag.ingest import load_all_documents
+        from app.v1.rag.pipeline import build_pipeline
+        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
+        from haystack.components.builders import PromptBuilder
 
-            System Components:
-            {json.dumps(template.get('nodes', []), indent=2)}
+        # ── ECU resolution (same as item definition) ─────────────────────────
+        print(f"Resolving ECU for damage scenarios: {system_name}")
+        
+        ecu_entry = rag_resolve_ecu(system_name)
+        if ecu_entry:
+            print(f"Matched ECU  : {ecu_entry['name']}")
+            print(f"Type         : {ecu_entry['type']}")
 
-            Relationships:
-            {json.dumps(template.get('edges', []), indent=2)}
-
-            Requirements:
-            1. Create different scenarios targeting different critical components
-            2. Each MUST include:
-            - Damage scenario details
-            - Realistic cyber losses (integrity/confidentiality/availability)
-            - Plausible impact ratings (Major/Moderate/Minor)
-            """
-
-        prompt_intro = user_prompt if user_prompt else default_prompt
-
-        prompt = f"""
-        {prompt_intro}
-
-        (for Data structure)
-        Use EXACTLY this structure:
-        {{
-        "system_name": "{system_name}",
-        "model_id": "{model_id}",
-        "type": "User-defined",
-        "Details": [
-            {{
-            "Description": "damage scenario description",
-            "Name": "damage scenario name",
-            "cyberLosses": [
-                {{
-                "id": "uuid",
-                "name": "loss type",
-                "isSelected": true,
-                "node": "component name",
-                "nodeId": "component_id"
-                }}
-            ],
-            "impacts": {{
-                "Financial Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-                "Safety Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-                "Operational Impact": "(Severe/Major/Moderate/Minor/Negligible)",
-                "Privacy Impact": "(Severe/Major/Moderate/Minor/Negligible)"
-            }},
-            "key": 1,
-            "_id": "scenario_id"
-            }}
-        ]
-        }}
+        # Build enriched query (same as item definition)
+        enriched_query = rag_build_enriched_query(system_name, ecu_entry)
+        
+        # Add architecture context to the question
+        architecture_context = f"""
+        IMPORTANT: The following system architecture has already been defined.
+        You MUST reference ONLY these existing components when generating damage scenarios.
+        
+        Existing Components (with their IDs):
+        {json.dumps([{
+            'id': node.get('id'),
+            'label': node.get('data', {}).get('label'),
+            'type': node.get('type')
+        } for node in template.get('nodes', [])], indent=2)}
         """
+        
+        # Build the question (like item definition)
+        question = f"""
+        SYSTEM REQUEST: Generate cybersecurity damage scenarios for the {system_name} system.
+        
+        {architecture_context}
+        
+        Generate realistic damage scenarios following ISO/SAE 21434 Clause 15.
+        Each damage scenario must reference specific components from the architecture above.
+        """
+        
+        # Add user/custom prompts if provided
+        if user_prompt:
+            question += f"\n\nAdditional User Requirements:\n{user_prompt}"
+        
+        if custom_prompt:
+            question += f"\n\nCustom Requirements:\n{custom_prompt}"
+        
+        # Add dynamic fields if any
+        if dynamic_prompt_lines:
+            question += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+        
+        print("\n" + "="*80)
+        print("ENRICHED QUERY (for LLM):")
+        print("="*80)
+        print(question[:1000] + "..." if len(question) > 1000 else question)
+        print("="*80 + "\n")
 
-        print("DEBUG: Final Prompt Sent to Model:\n", prompt)
+        # ── Load documents and build pipeline (same as item definition) ──────
+        print(f"Loading documents from Azure and building RAG pipeline...")
+        
+        all_docs = load_all_documents()
+        pipeline, _ = build_pipeline(all_docs)
+        
+        # Retrieve documents
+        print(f"Retrieving documents for system: {system_name}")
+        
+        retrieval_result = pipeline.run(
+            {
+                "text_embedder": {"text": system_name},
+                "prompt_builder": {"question": question},
+            },
+            include_outputs_from=["retriever"],
+        )
+        
+        retrieved_docs = retrieval_result["retriever"]["documents"]
+        print(f"Retrieved {len(retrieved_docs)} documents")
+        
+        # ── Build prompt using TARA_PROMPT_TEMPLATE (same as item definition) ──
+        print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
+        
+        prompt_builder = PromptBuilder(
+            template=TARA_PROMPT_TEMPLATE,
+            required_variables=["documents", "question"],
+        )
+        
+        prompt_result = prompt_builder.run(
+            documents=retrieved_docs,
+            question=question
+        )
+        
+        rag_prompt = prompt_result["prompt"]
+        
+        print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
+        print(f"RAG prompt length: {len(rag_prompt)} characters")
 
-        response = gemini_client.generate_content(prompt)
-        raw_output = gemini_client.get_text(response).strip()
-        print("DEBUG: Raw AI Output:", raw_output)
+        # ── Combine with custom prompt if provided ──────────────────────────
+        if custom_prompt:
+            enhanced_prompt = f"""
+System: {system_name}
 
-        cleaned = re.sub(r"```[a-z]*", "", raw_output).strip("` \n")
-        scenarios = json.loads(cleaned)
-        scenarios["model_id"] = model_id
+Additional Requirements: {custom_prompt}
 
-        # Ensure _id and key are assigned
-        for i, detail in enumerate(scenarios.get("Details", []), start=1):
-            detail["_id"] = detail.get("_id", str(uuid.uuid4()))
-            detail["key"] = detail.get("key", i)
+{rag_prompt}
+"""
+        else:
+            enhanced_prompt = rag_prompt
+
+        # Add dynamic field lines if any
+        if dynamic_prompt_lines:
+            enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+
+        # Add user prompt if provided
+        if user_prompt:
+            enhanced_prompt += f"\n\nUser Requirements:\n{user_prompt}"
+
+        # ── Save the final prompt for debugging ─────────────────────────────
+        print("\n" + "="*80)
+        print("FINAL PROMPT SENT TO GEMINI:")
+        print("="*80)
+        print(enhanced_prompt[:2000] + "..." if len(enhanced_prompt) > 2000 else enhanced_prompt)
+        print("="*80 + "\n")
+
+        # Save to file for inspection
+        try:
+            with open("damage_scenario_prompt.txt", "w", encoding="utf-8") as f:
+                f.write(enhanced_prompt)
+            print("✅ Damage scenario prompt saved to damage_scenario_prompt.txt")
+        except Exception as e:
+            print(f"Could not save prompt to file: {e}")
+
+        # ── Call Gemini ─────────────────────────────────────────────────────
+        print("Calling Gemini API...")
+        response = gemini_client.generate_content(enhanced_prompt)
+        output = gemini_client.get_text(response).strip()
+
+        # Print Gemini response
+        print("\n" + "="*80)
+        print("GEMINI RESPONSE (first 1000 chars):")
+        print("="*80)
+        print(output[:1000])
+        print("="*80 + "\n")
+
+        # Clean markdown fences and JS-style comments
+        cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
+        cleaned = re.sub(r'//.*', '', cleaned)
+
+        # ── Parse JSON using RAG's parse_and_fix ────────────────────────────
+        tara_json = rag_parse_and_fix(cleaned)
+
+        if tara_json is None:
+            # Fallback to manual parsing
+            try:
+                tara_json = json.loads(cleaned)
+                print("✅ Successfully parsed JSON from Gemini (manual)")
+            except json.JSONDecodeError as e:
+                print(f"❌ JSON parse error: {e}")
+                print(f"Raw output: {cleaned[:500]}...")
+                raise ValueError(f"Invalid JSON from Gemini: {e}")
+
+        # ── Extract the damage scenarios structure ──────────────────────────
+        # The prompt.py returns JSON with assets and damage_scenarios
+        if "damage_scenarios" in tara_json:
+            scenarios = tara_json["damage_scenarios"]
+        else:
+            scenarios = tara_json
+        
+        # Ensure the structure matches what the frontend expects
+        # The Details should be in the format that get_damage_scene() expects
+        if "Details" not in scenarios:
+            # Try to extract from Derivations if that's what was returned
+            if "Derivations" in scenarios and scenarios["Derivations"]:
+                scenarios["Details"] = []
+                for i, deriv in enumerate(scenarios["Derivations"], start=1):
+                    detail = {
+                        "Name": deriv.get("name", f"Damage Scenario {i}"),
+                        "Description": deriv.get("damage_scene", deriv.get("description", "")),
+                        "cyberLosses": deriv.get("cyberLosses", []),
+                        "impacts": deriv.get("impacts", {
+                            "Financial Impact": "Moderate",
+                            "Safety Impact": "Moderate",
+                            "Operational Impact": "Moderate",
+                            "Privacy Impact": "Moderate"
+                        }),
+                        "key": i,
+                        "_id": str(uuid.uuid4())
+                    }
+                    scenarios["Details"].append(detail)
+            else:
+                scenarios["Details"] = []
+
+        # Ensure each detail has the required fields
+        valid_node_ids = {node.get("id") for node in template.get("nodes", [])}
+        valid_node_labels = {node.get("data", {}).get("label"): node.get("id") 
+                            for node in template.get("nodes", [])}
+        
+        for detail in scenarios.get("Details", []):
+            # Ensure _id exists
+            if "_id" not in detail:
+                detail["_id"] = str(uuid.uuid4())
+            
+            # Ensure key exists
+            if "key" not in detail:
+                detail["key"] = scenarios["Details"].index(detail) + 1
+            
+            # Ensure cyberLosses exists and references valid nodes
+            if "cyberLosses" not in detail:
+                detail["cyberLosses"] = []
+            
+            # Validate and fix node references
+            validated_losses = []
             for loss in detail.get("cyberLosses", []):
-                loss["id"] = loss.get("id", str(uuid.uuid4()))
-                loss["isSelected"] = loss.get("isSelected", True)
+                if loss.get("nodeId") not in valid_node_ids:
+                    node_name = loss.get("node", "")
+                    if node_name in valid_node_labels:
+                        loss["nodeId"] = valid_node_labels[node_name]
+                        loss["node"] = node_name
+                        validated_losses.append(loss)
+                    else:
+                        print(f"Warning: Could not find node '{node_name}' for loss")
+                else:
+                    validated_losses.append(loss)
+            detail["cyberLosses"] = validated_losses
+            
+            # Ensure impacts exists
+            if "impacts" not in detail:
+                detail["impacts"] = {
+                    "Financial Impact": "Moderate",
+                    "Safety Impact": "Moderate",
+                    "Operational Impact": "Moderate",
+                    "Privacy Impact": "Moderate"
+                }
 
-        # Insert into DB
-        damage_result = db.Damage_scenarios.insert_one(scenarios)
+        print(f"Generated {len(scenarios.get('Details', []))} damage scenarios")
+
+        # ── Store in database as "User-defined" type ─────────────────────────
+        from datetime import datetime
+        
+        current_time = datetime.now()
+        
+        # Check if damage scenarios already exist for this model with User-defined type
+        existing = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
+        
+        if existing:
+            # Update existing - preserve existing derivations if any
+            update_data = {
+                "$set": {
+                    "Details": scenarios.get("Details", []),
+                    "last_updated": current_time
+                }
+            }
+            # Only update Derivations if they exist in the new data
+            if "Derivations" in scenarios:
+                update_data["$set"]["Derivations"] = scenarios["Derivations"]
+            
+            result = db.Damage_scenarios.update_one(
+                {"model_id": model_id, "type": "User-defined"},
+                update_data
+            )
+            operation = "updated"
+            scenario_id = str(existing["_id"])
+        else:
+            # Insert new with type "User-defined"
+            damage_doc = {
+                "model_id": model_id,
+                "type": "User-defined",  # Key change: Store as User-defined
+                "Details": scenarios.get("Details", []),
+                "Derivations": scenarios.get("Derivations", []),
+                "created_at": current_time,
+                "last_updated": current_time
+            }
+            result = db.Damage_scenarios.insert_one(damage_doc)
+            operation = "created"
+            scenario_id = str(result.inserted_id)
 
         # Convert ObjectIds to strings for safe JSON serialization
         def convert_objectid(obj):
@@ -578,33 +816,31 @@ def create_damage_scenarios(standalone=False, request_data=None):
                 return {k: convert_objectid(v) for k, v in obj.items()}
             return obj
 
-        safe_scenarios = convert_objectid(scenarios)
+        safe_scenarios = convert_objectid({
+            "Details": scenarios.get("Details", []),
+            "Derivations": scenarios.get("Derivations", [])
+        })
 
-        result = {
-            "message": "Damage scenarios created successfully",
-            "scenario_id": str(damage_result.inserted_id),
+        result_data = {
+            "message": f"Damage scenarios {operation} successfully",
+            "scenario_id": scenario_id,
             "model_id": model_id,
             "scenarios": safe_scenarios,
+            "stats": {
+                "total_scenarios": len(safe_scenarios.get("Details", []))
+            }
         }
 
         if standalone:
-            return result
-        return jsonify(result), 201
-
-    except json.JSONDecodeError as e:
-        print("ERROR: JSON Decode Error:", str(e))
-        traceback.print_exc()
-        if standalone:
-            raise ValueError("Invalid response format from AI")
-        return jsonify({"error": "Invalid response format from AI", "details": str(e)}), 500
+            return result_data
+        return jsonify(result_data), 201
 
     except Exception as e:
-        print("ERROR: Unexpected Exception:", str(e))
+        import traceback
         traceback.print_exc()
         if standalone:
-            raise
-        return jsonify({"error": "Unexpected error", "details": str(e)}), 500
-
+            raise e
+        return jsonify({"error in damage scenario generation": str(e)}), 500
 
 #4 - Threat scenario creation
 # Manual threat creation
@@ -814,14 +1050,23 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
 @modelprompt.route('/v1/generate/derived-threat-scenarios', methods=['POST'])
 def create_derived_threat_scenario():
     try:
-        name = request.form.get('name', "")
-        description = request.form.get('description', "")
-        model_id = request.form.get('modelId', "")
-        user_prompt = request.form.get('threatScenarioPrompt', "")
-        threat_ids_raw = request.form.get('threatIds', "[]")
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
 
-        threat_ids = json.loads(threat_ids_raw)
-
+        name = data.get('name', "")
+        description = data.get('description', "")
+        model_id = data.get('modelId', "")
+        user_prompt = data.get('threatScenarioPrompt', "")
+        
+        # Handle threat_ids which might be a string (from form) or list (from JSON)
+        threat_ids_raw = data.get('threatIds', "[]")
+        if isinstance(threat_ids_raw, str):
+            threat_ids = json.loads(threat_ids_raw)
+        else:
+            threat_ids = threat_ids_raw
         if not model_id or not threat_ids:
             return jsonify({"error": "Missing modelId or threatIds"}), 400
 
@@ -837,10 +1082,17 @@ def create_threat_and_derived_combined():
     try:
         start_time = time.time()
 
-        model_id = request.form.get('modelId', "")
-        name = request.form.get('name', "")
-        description = request.form.get('description', "")
-        user_prompt = request.form.get('threatScenarioPrompt', "")
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+        # Get JSON data instead of form data
+ 
+        model_id = data.get('modelId', "")
+        name = data.get('name', "")
+        description = data.get('description', "")
+        user_prompt = data.get('threatScenarioPrompt', "")
 
         if not model_id:
             return jsonify({"error": "modelId is required"}), 400
@@ -873,6 +1125,8 @@ def create_threat_and_derived_combined():
         derived_status = 500
 
         t2 = time.time()
+        
+        # For the internal call, you might need to use JSON instead of MultiDict
         with current_app.test_request_context(
             "/v1/generate/derived-threat-scenario",
             method="POST",
@@ -913,7 +1167,6 @@ def create_threat_and_derived_combined():
         print("[FATAL ERROR in combined API]:", str(e))
         traceback.print_exc()
         return jsonify({"error": "Error in combined API", "details": str(e)}), 500
-
 
 #5 - Attack Scenario Creation
 def preprocess_threat_scenarios(threat_scenarios):
@@ -1030,8 +1283,15 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
 @modelprompt.route('/v1/generate/attack-tree', methods=['POST'])
 def generate_attack_tree():
     try:
-        model_id = request.form.get('modelId', '')
-        user_prompt = request.form.get('attackscenarioPrompt', '')
+
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        model_id = data.get('modelId', '')
+        user_prompt = data.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -1182,8 +1442,15 @@ def generate_possible_attacks_with_gemini(threat_scenarios, model_id, user_promp
 @modelprompt.route('/v1/generate/attacks', methods=['POST'])
 def generate_attacks():
     try:
-        model_id = request.form.get('modelId', '')
-        user_prompt = request.form.get('attackscenarioPrompt', '')
+
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        model_id = data.get('modelId', '')
+        user_prompt = data.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -1337,8 +1604,16 @@ def convert_possible_events(possible_events, model_id):
 @modelprompt.route('/v1/convert/possible-events', methods=['POST'])
 def convert_possible_events_from_attack_trees():
     try:
-        model_id = request.form.get("modelId", "")
-        user_prompt = request.form.get('attackscenarioPrompt', '')
+
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+            
+        model_id = data.get("modelId", "")
+        user_prompt = data.get('attackscenarioPrompt', '')
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
 
@@ -1360,8 +1635,14 @@ def convert_possible_events_from_attack_trees():
 @modelprompt.route('/v1/generate/full-attack-scenario', methods=['POST'])
 def generate_full_attack_pipeline():
     try:
-        model_id = request.form.get('modelId', '')
-        user_prompt = request.form.get('attackscenarioPrompt', '')
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        model_id = data.get('modelId', '')
+        user_prompt = data.get('attackscenarioPrompt', '')
 
         if not model_id:
             return jsonify({"error": "Missing modelId"}), 400
@@ -1464,9 +1745,17 @@ def generate_cybersecurity_artifacts():
     Generate and save cybersecurity requirements, controls, goals, and claims.
     """
     try:
-        model_id = request.form.get('modelId', '')
-        system_name = request.form.get('systemName', '')
-        user_prompt = request.form.get('cybersecurityPrompt', '')
+
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+
+        model_id = data.get('modelId', '')
+        system_name = data.get('systemName', '')
+        user_prompt = data.get('cybersecurityPrompt', '')
 
         if not model_id or not system_name:
             return jsonify({"error": "Missing modelId or systemName"}), 400
@@ -1550,7 +1839,13 @@ def auto_generate_risk_treatments():
     Automatically generates all risk treatments for a given modelId.
     """
     try:
-        model_id = request.form.get("modelId")
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        model_id = data.get("modelId")
         if not model_id:
             return jsonify({"error": "modelId is required"}), 400
 
