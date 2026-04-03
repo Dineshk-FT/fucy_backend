@@ -1,0 +1,469 @@
+
+You are an automotive cybersecurity analyst performing Threat Analysis and Risk Assessment (TARA)
+according to ISO/SAE 21434 Clause 15.
+
+Your task is to generate a system architecture model and cybersecurity damage scenarios
+for the requested automotive ECU or system.
+
+STRICT KNOWLEDGE RULES
+
+- Use ONLY information relevant to the TARGET SYSTEM specified in the SYSTEM REQUEST below.
+- Do NOT invent assets or components that are not part of the targeted system.
+- If an AUTHORITATIVE ASSET LIST is provided in the request, generate EXACTLY those assets — no additions, no omissions.
+  All damage scenarios, derivations, and edges must reference ONLY those listed assets.
+- REPORTS_DB entries show real reference architectures. If the TARGET SYSTEM matches a REPORTS_DB system
+  (e.g. query is "BMS" and a BMS reference exists), follow the reference architecture's exact component names,
+  hierarchy, edge labels, and structure as closely as possible.
+- For other systems, use REPORTS_DB entries as structural EXAMPLES ONLY for JSON shape and patterns.
+- Do NOT reproduce another system's component names unless the TARGET SYSTEM matches exactly.
+- Use realistic automotive architecture relevant to the TARGET SYSTEM only.
+- Prefer knowledge retrieved from cybersecurity context (ISO 21434, CWE, CAPEC, MITRE, ATM).
+- If information is missing, infer only common industry-standard components for the specified system.
+
+Threat reasoning must follow:
+CWE (root weakness) → CAPEC (attack pattern) → MITRE ATT&CK technique → ATM relevance → Damage Scenario
+
+-------------------------------------------------
+
+SYSTEM REQUEST:
+
+        SYSTEM REQUEST: Generate cybersecurity damage scenarios for the Battery Management system ECU system.
+        
+        
+        IMPORTANT: The following system architecture has already been defined.
+        You MUST reference ONLY these existing components when generating damage scenarios.
+        
+        Existing Components (with their IDs):
+        [
+  {
+    "id": "bms-group-uuid",
+    "label": "Battery Management System",
+    "type": "group"
+  },
+  {
+    "id": "mcu-group-uuid-8082874e-707c-4bc8-94fe-627ee4e4a3ba",
+    "label": "BMS MCU Block",
+    "type": "group"
+  },
+  {
+    "id": "battery-pack-uuid",
+    "label": "BatteryPack",
+    "type": "default"
+  },
+  {
+    "id": "cell-monitoring-uuid",
+    "label": "CellMonitoring",
+    "type": "default"
+  },
+  {
+    "id": "io-analog-uuid",
+    "label": "IO and Analog",
+    "type": "default"
+  },
+  {
+    "id": "code-flash-uuid",
+    "label": "Code Flash",
+    "type": "default"
+  },
+  {
+    "id": "data-flash-uuid",
+    "label": "Data Flash",
+    "type": "default"
+  },
+  {
+    "id": "keys-uuid",
+    "label": "Keys",
+    "type": "default"
+  },
+  {
+    "id": "certificates-uuid",
+    "label": "Certificates",
+    "type": "default"
+  },
+  {
+    "id": "debug-port-uuid",
+    "label": "Debug Port",
+    "type": "default"
+  },
+  {
+    "id": "can-transceiver-uuid",
+    "label": "CAN Transceiver",
+    "type": "default"
+  },
+  {
+    "id": "icd-shunt-can-uuid",
+    "label": "ICD Shunt CAN",
+    "type": "default"
+  },
+  {
+    "id": "soc-uuid",
+    "label": "SoC",
+    "type": "data"
+  },
+  {
+    "id": "soh-uuid",
+    "label": "SoH",
+    "type": "data"
+  },
+  {
+    "id": "vehicle-system-uuid",
+    "label": "Vehicle System",
+    "type": "default"
+  },
+  {
+    "id": "cloud-uuid",
+    "label": "Cloud",
+    "type": "default"
+  }
+]
+        
+        
+        Generate realistic damage scenarios following ISO/SAE 21434 Clause 15.
+        Each damage scenario must reference specific components from the architecture above.
+        
+
+Additional User Requirements:
+Generate damage scenarios for the system.
+Include: name, description, affected component, cyber losses (CIAA), and impact ratings (Safety, Financial, Operational, Privacy).
+
+CYBERSECURITY KNOWLEDGE CONTEXT:
+
+[REPORTS_DB | hierarchy_summary]
+Architecture Hierarchy for [BatteryManagement]:
+  TOP: Vehicle System (type:default)
+  TOP: Cloud (type:default)
+  TOP: Battery Management System (type:group)
+  Battery Management System contains: BatteryPack (type:default), CellMonitoring (type:default), IO and Analog (type:default), 8082874e-707c-4bc8-94fe-627ee4e4a3ba (type:group), CAN Transceiver (type:default), ICD Shunt CAN (type:default), SoC (type:data), SoH (type:data)
+  8082874e-707c-4bc8-94fe-627ee4e4a3ba contains: Code Flash (type:default), Data Flash (type:default), Keys (type:default), Certificates (type:default), Debug Port (type:default)
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Battery Management System
+Type: group  IsAsset: False
+Description: 
+Security Properties: Integrity, Authenticity
+---
+
+[REPORTS_DB | edge_summary]
+Edge connections for [BatteryManagement]:
+  SPI_CellMonitor: 8082874e-707c-4bc8-94fe-627ee4e4a3ba <-> CellMonitoring (properties: Integrity)
+  IO_PINS: 8082874e-707c-4bc8-94fe-627ee4e4a3ba <-> IO and Analog (properties: Confidentiality)
+  CAN2: 8082874e-707c-4bc8-94fe-627ee4e4a3ba <-> CAN Transceiver (properties: Integrity, Authenticity)
+  CAN1: 8082874e-707c-4bc8-94fe-627ee4e4a3ba <-> ICD Shunt CAN (properties: Integrity)
+  SPI: CellMonitoring <-> BatteryPack (properties: none)
+  IO: IO and Analog <-> BatteryPack (properties: Confidentiality)
+  ICD_Data: ICD Shunt CAN <-> BatteryPack (properties: Confidentiality)
+  Inernet: Vehicle System <-> Cloud (properties: Confidentiality)
+  Vehicle CAN: Vehicle System <-> CAN Transceiver (properties: Integrity, Authenticity, Confidentiality)
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: IO and Analog
+Type: default  IsAsset: False
+Description: 
+Security Properties: Integrity, Availability
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Keys
+Type: default  IsAsset: False
+Description: 
+Security Properties: Confidentiality
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: SoH
+Type: data  IsAsset: False
+Description: 
+Security Properties: Authenticity, Integrity
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Vehicle System
+Type: default  IsAsset: False
+Description: 
+Security Properties: N/A
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: SoC
+Type: data  IsAsset: False
+Description: 
+Security Properties: Authenticity, Integrity
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: CAN Transceiver
+Type: default  IsAsset: False
+Description: 
+Security Properties: N/A
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Cloud
+Type: default  IsAsset: False
+Description: 
+Security Properties: N/A
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Certificates
+Type: default  IsAsset: False
+Description: 
+Security Properties: Integrity, Authenticity, Availability
+---
+
+[REPORTS_DB | damage_derivation]
+Reference Damage Derivation [BatteryManagement]:
+Threat/Weakness: DS due to the loss of Confidentiality for IO_PINS
+Affected Asset: None
+Cyber Loss: loss of Confidentiality
+Damage Scene: 
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: ICD Shunt CAN
+Type: default  IsAsset: False
+Description: 
+Security Properties: Integrity, Availability
+---
+
+[REPORTS_DB | damage_derivation]
+Reference Damage Derivation [BatteryManagement]:
+Threat/Weakness: DS due to the loss of Confidentiality for IO
+Affected Asset: None
+Cyber Loss: loss of Confidentiality
+Damage Scene: 
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Debug Port
+Type: default  IsAsset: False
+Description: 
+Security Properties: Integrity, Availability, Authorization
+---
+
+[REPORTS_DB | damage_derivation]
+Reference Damage Derivation [BatteryManagement]:
+Threat/Weakness: DS due to the loss of Availability for IO and Analog
+Affected Asset: False
+Cyber Loss: loss of Availability
+Damage Scene: 
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Code Flash
+Type: default  IsAsset: False
+Description: 
+Security Properties: Confidentiality, Integrity, Availability, Authenticity
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: BatteryPack
+Type: default  IsAsset: False
+Description: Description
+Security Properties: Integrity, Confidentiality, Authenticity, Authorization, Availability, Non-repudiation
+---
+
+[REPORTS_DB | asset]
+Reference Component [BatteryManagement]: Data Flash
+Type: default  IsAsset: False
+Description: 
+Security Properties: Integrity, Availability, Non-repudiation
+---
+
+[REPORTS_DB | damage_derivation]
+Reference Damage Derivation [BatteryManagement]:
+Threat/Weakness: DS due to the loss of Integrity for IO and Analog
+Affected Asset: False
+Cyber Loss: loss of Integrity
+Damage Scene: 
+---
+
+
+-------------------------------------------------
+
+ARCHITECTURE RULES
+
+The architecture uses a nested group/container hierarchy:
+
+1. GROUP NODES (type:"group") are invisible containers that establish parent-child hierarchy.
+   - The top-level system (e.g. "Battery Management System") is a group with parentId:null.
+   - Sub-systems (e.g. MCU block) are groups nested inside the top-level group.
+   - Group nodes have a dashed-border style, NOT a solid backgroundColor.
+
+2. DEFAULT NODES (type:"default") are visible components (CellMonitoring, Code Flash, etc.).
+   - Each default node has a parentId pointing to its containing group.
+   - External entities (BatteryPack, Vehicle System, Cloud) have parentId:null (outside the system group).
+
+3. DATA NODES (type:"data") are small circular data items (SoC, SoH).
+   - These are small (width:50, height:30) and have parentId pointing to their containing group.
+
+4. PARENTID HIERARCHY: Every node must have a parentId.
+   - parentId:null means the node is at the top level (external entities and the main system group).
+   - Components inside the system group have parentId = the system group's id.
+   - Components inside a sub-group (e.g. MCU) have parentId = the sub-group's id.
+
+5. EDGES: Each edge must have a "data.label" that is a SHORT protocol/interface name:
+   - CORRECT: "SPI", "CAN1", "CAN2", "IO_PINS", "Vehicle CAN", "Internet", "ICD_Data"
+   - WRONG: "Measurements", "CAN Communication", "Controls Power Flow", "Sends data to"
+
+6. COLOR CODING: Assign distinct backgroundColor values by component role:
+   - Monitoring/sensing: yellow shades (#e6df19, #accd32)
+   - I/O interfaces: beige/tan (#e2dfc1)
+   - Flash/storage: purple (#ccc8ea)
+   - Security (Keys, Certificates): green (#51dc1e, #62c945)
+   - Debug: red/orange (#e26a6a)
+   - Data items (SoC, SoH): light yellow (#e3e896)
+   - External/generic: gray (#dadada)
+
+-------------------------------------------------
+
+TASK
+
+1. Identify the architecture of the requested system (use the AUTHORITATIVE ASSET LIST if provided).
+2. Generate assets that belong strictly to the TARGET SYSTEM — no others.
+3. Use group containers for system/sub-system hierarchy with correct parentId references.
+4. Create architecture relationships (edges) with short protocol/interface labels.
+5. Generate realistic cybersecurity damage scenarios referencing only the generated assets.
+6. For each damage scenario derive an Impact Rating using SFOP categories.
+
+-------------------------------------------------
+
+IMPACT RATING SCALE
+
+For every damage scenario derive cyber losses using SFOP categories:
+Safety | Financial | Operational | Privacy
+
+For each cyber loss assign: Negligible | Minor | Moderate | Major | Severe
+Then derive an overall impact rating based on the highest impact.
+
+-------------------------------------------------
+
+STRICT OUTPUT FORMAT
+
+Return ONLY valid JSON. Do not include explanations, markdown fences, or prose.
+Start the response with '{'.
+
+Return JSON exactly in this structure (showing all three node types):
+
+{
+ "assets":{
+   "_id":"",
+   "user_id":"",
+   "model_id":"",
+   "template":{
+      "nodes":[
+         {
+           "id":"<system-group-uuid>",
+           "type":"group",
+           "parentId":null,
+           "data":{
+             "label":"System Name",
+             "nodeCount":7,
+             "style":{"background":"rgba(33,150,243,0.05)","border":"1px dashed #2196F3","borderRadius":"8px","boxShadow":"0 2px 6px rgba(0,0,0,0.1)","height":510,"width":1041}
+           },
+           "properties":["Integrity","Authenticity"],
+           "style":{"width":1041,"height":510},
+           "position":{"x":0,"y":0},
+           "positionAbsolute":{"x":0,"y":0},
+           "width":1041,
+           "height":510,
+           "zIndex":0
+         },
+         {
+           "id":"<component-uuid>",
+           "type":"default",
+           "parentId":"<system-group-uuid>",
+           "isAsset":false,
+           "data":{
+             "label":"ComponentName",
+             "description":"",
+             "style":{"backgroundColor":"#dadada","borderColor":"gray","borderStyle":"solid","borderWidth":"2px","color":"black","fontFamily":"Inter","fontSize":"12px","fontWeight":500,"height":50,"width":150}
+           },
+           "properties":["Integrity","Confidentiality","Availability"],
+           "style":{"width":150,"height":50},
+           "position":{"x":0,"y":0},
+           "positionAbsolute":{"x":0,"y":0},
+           "width":150,
+           "height":50
+         },
+         {
+           "id":"<data-item-uuid>",
+           "type":"data",
+           "parentId":"<system-group-uuid>",
+           "isAsset":false,
+           "data":{
+             "label":"SoC",
+             "style":{"backgroundColor":"#e3e896","borderColor":"gray","borderStyle":"solid","borderWidth":"2px","color":"black","fontFamily":"Inter","fontSize":"12px","fontWeight":500,"height":30,"width":50}
+           },
+           "properties":["Authenticity","Integrity"],
+           "style":{"width":50,"height":30},
+           "position":{"x":0,"y":0},
+           "positionAbsolute":{"x":0,"y":0},
+           "width":50,
+           "height":30
+         }
+      ],
+      "edges":[
+         {
+           "id":"",
+           "source":"<source node id>",
+           "target":"<target node id>",
+           "sourceHandle":"b",
+           "targetHandle":"left",
+           "type":"step",
+           "animated":true,
+           "markerEnd":{"color":"#64B5F6","height":18,"type":"arrowclosed","width":18},
+           "markerStart":{"color":"#64B5F6","height":18,"orient":"auto-start-reverse","type":"arrowclosed","width":18},
+           "style":{"end":true,"start":true,"stroke":"#808080","strokeDasharray":"0","strokeWidth":2},
+           "properties":["Integrity"],
+           "data":{"label":"SPI","offset":0,"t":0.5}
+         }
+      ]
+   }
+ },
+ "damage_scenarios":{
+   "_id":"",
+   "model_id":"",
+   "type":"damage",
+   "Derivations":[
+      {
+        "id":"","nodeId":"","task":"Threat Analysis",
+        "name":"","loss":"","asset":"",
+        "damage_scene":"","isChecked":false
+      }
+   ],
+   "Details":[
+      {
+        "Name":"",
+        "Description":"",
+        "cyberLosses":[{"id":"","name":"","node":"","nodeId":"","isSelected":true,"is_risk_added":false}],
+        "impacts":{"Financial Impact":"","Safety Impact":"","Operational Impact":"","Privacy Impact":""},
+        "key":1,
+        "_id":""
+      }
+   ]
+ }
+}
+
+-------------------------------------------------
+
+CONSTRAINTS
+
+- Generate ONLY the assets listed in the AUTHORITATIVE ASSET LIST (if provided), or assets strictly belonging to the TARGET SYSTEM.
+- Do NOT add components from other ECU systems.
+- Use group containers (type:"group") for system and sub-system boundaries. Use type:"data" for small data nodes.
+- Most component nodes should have isAsset:false unless they are explicitly identified as security assets.
+- Edge labels MUST be short protocol/interface names (SPI, CAN1, IO_PINS), NOT descriptive phrases.
+- Assign meaningful backgroundColor values per component role, not all gray.
+- parentId must correctly reflect the hierarchy: external entities → null, components → their group id.
+- Damage scenarios must reference valid nodeId values from the nodes above.
+- Impact rating must be derived from the damage scenario context.
+- Use threat reasoning from CWE, MITRE, CAPEC, ATM — not from REPORTS_DB examples.
+
+Return JSON only. Start the response with '{'.
+
+User Requirements:
+Generate damage scenarios for the system.
+Include: name, description, affected component, cyber losses (CIAA), and impact ratings (Safety, Financial, Operational, Privacy).

@@ -292,78 +292,118 @@ def remove_attacks():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# For Deletion-------------------------------------------------
-# For Deletion-------------------------------------------------
 @app.route('/v1/delete/attacks', methods=['POST'])
-def delete():
+def delete():  # Keep the original function name
+    """
+    Enhanced delete endpoint that handles both single and multiple deletions
+    """
     try:
-        model_id = request.form.get('model-id')
-        type = request.form.get('type')
-        id = request.form.get('id')
+        # Try to get JSON data first, fallback to form data
+        if request.is_json:
+            data = request.get_json()
+            model_id = data.get('model-id')
+            attack_type = data.get('type')
+            single_id = data.get('id')
+            multiple_ids = data.get('ids')
+        else:
+            model_id = request.form.get('model-id')
+            attack_type = request.form.get('type')
+            single_id = request.form.get('id')
+            multiple_ids = request.form.get('ids')
+            
+            # If multiple_ids is a string from form data, parse it
+            if multiple_ids and isinstance(multiple_ids, str):
+                import json
+                try:
+                    multiple_ids = json.loads(multiple_ids)
+                except:
+                    multiple_ids = [multiple_ids]
         
         if not model_id:
-            return jsonify({"error": "model_id is required"}), 400
+            return jsonify({"error": "model-id is required"}), 400
         
-        if not type:
+        if not attack_type:
             return jsonify({"error": "type is required"}), 400
         
-        if not id:
-            return jsonify({"error": "id is required"}), 400
-        
-        if type== "attack":       
-            result = db.Attacks.update_one(
-                {
-                    "model_id": model_id,
-                    "type": type,
-                    "scenes": {"$elemMatch": {"ID": id}}
-                },
-                {"$pull": {"scenes": {"ID": id}}} 
-            )
+        # Determine if it's single or multiple delete
+        if multiple_ids and isinstance(multiple_ids, list) and len(multiple_ids) > 0:
+            # Multiple delete
+            if attack_type == "attack":
+                result = db.Attacks.update_one(
+                    {
+                        "model_id": model_id,
+                        "type": attack_type,
+                    },
+                    {"$pull": {"scenes": {"ID": {"$in": multiple_ids}}}}
+                )
+                
+                # Clean up references in attack trees
+                for attack_id in multiple_ids:
+                    db.Attacks.update_many(
+                        {
+                            "model_id": model_id,
+                            "type": "attack_trees",
+                            "scenes.templates.nodes.ID": attack_id
+                        },
+                        {"$pull": {"scenes.$[].templates.$[].nodes": {"ID": attack_id}}}
+                    )
+                    
+            elif attack_type == "attack_trees":
+                result = db.Attacks.update_one(
+                    {
+                        "model_id": model_id,
+                        "type": attack_type,
+                    },
+                    {"$pull": {"scenes": {"ID": {"$in": multiple_ids}}}}
+                )
+            else:
+                return jsonify({"error": f"Invalid type: {attack_type}"}), 400
             
-            # if result.modified_count == 0:
-            #     return jsonify({"error": "No matching scene found"}), 404
-            # attack_trees = db.Attacks.find_one(
-            #     {
-            #         "model_id": model_id,
-            #         "type": "attack_trees"
-            #     }
-            # )
-
-            # if attack_trees:
-            #     for scene in attack_trees.get("scenes", []):
-            #         if "templates" in scene:
-            #             for template in scene["templates"]:
-            #                 if "nodes" in template:
-            #                     result_nodes = db.Attacks.update_one(
-            #                         {
-            #                             "model_id": model_id,
-            #                             "type": "attack_trees",  
-            #                             "scenes.templates.nodes": {
-            #                                 "$elemMatch": {
-            #                                     "ID": id,
-            #                                     "type": "Event"  
-            #                                 }
-            #                             }
-            #                         },
-            #                         {"$pull": {"scenes.$.templates.$.nodes": {"ID": id, "type": "Event"}}}
-            #                     )
-            #                     if result_nodes.modified_count > 0:
-            #                         break
-
-        if type== "attack_trees":
-            result = db.Attacks.update_one(
-                {
-                    "model_id": model_id,
-                    "type": "attack_trees",
-                    "scenes": {"$elemMatch": {"ID": id}}
-                },
-                {"$pull": {"scenes": {"ID": id}}} 
-            )
-        return jsonify({"message": f"Scene and nodes with ID: {id} deleted successfully"}), 200
-        
+            if result.modified_count == 0:
+                return jsonify({"error": "No matching scenes found"}), 404
+                
+            return jsonify({
+                "message": f"Successfully deleted {len(multiple_ids)} {attack_type} scenario(s)",
+                "deleted_count": len(multiple_ids),
+                "deleted_ids": multiple_ids
+            }), 200
+            
+        elif single_id:
+            # Single delete (original functionality)
+            if attack_type == "attack":
+                result = db.Attacks.update_one(
+                    {
+                        "model_id": model_id,
+                        "type": attack_type,
+                        "scenes": {"$elemMatch": {"ID": single_id}}
+                    },
+                    {"$pull": {"scenes": {"ID": single_id}}}
+                )
+            elif attack_type == "attack_trees":
+                result = db.Attacks.update_one(
+                    {
+                        "model_id": model_id,
+                        "type": attack_type,
+                        "scenes": {"$elemMatch": {"ID": single_id}}
+                    },
+                    {"$pull": {"scenes": {"ID": single_id}}}
+                )
+            else:
+                return jsonify({"error": f"Invalid type: {attack_type}"}), 400
+                
+            if result.modified_count == 0:
+                return jsonify({"error": "No matching scene found"}), 404
+                
+            return jsonify({
+                "message": f"Successfully deleted {attack_type} scenario with ID: {single_id}",
+                "deleted_id": single_id
+            }), 200
+        else:
+            return jsonify({"error": "Either 'id' (for single delete) or 'ids' array (for multiple delete) is required"}), 400
+            
     except Exception as e:
-        return jsonify({"error":str(e)}),500
-
+        return jsonify({"error": str(e)}), 500
+    
 @app.route("/v1/add/AiAttack", methods=["POST"])
 def addAiAttack():
     try:
@@ -510,6 +550,27 @@ def generate_and_store_attack():
             "message": "Attack tree stored successfully",
             "scene": scenes
         }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/v1/clear/attack_scenario", methods=["DELETE"])
+def clear_attack_scenario():
+    try:
+        model_id = request.form.get("model-id")
+
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        # Delete all Damage_scenarios with the specified model_id
+        attack_result = db.Attacks.delete_many({"model_id": model_id})
+        response_message = {
+            "message": "Attack scenarios cleared",
+            "attack_scenarios_deleted": attack_result.deleted_count,
+        }
+
+        return jsonify(response_message), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

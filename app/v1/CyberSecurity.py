@@ -207,3 +207,23 @@ def delete_cybersecurity():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/v1/clear/cybersecurity", methods=["DELETE"])
+def clear_cybersecurity():
+    try:
+        model_id = request.form.get("model-id")
+
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        # Delete all Damage_scenarios with the specified model_id
+        cyber_result = db.Cybersecurity.delete_many({"model_id": model_id})
+        response_message = {
+            "message": "Cybersecurity scenarios cleared",
+            "cybersecurity_scenarios_deleted": cyber_result.deleted_count,
+        }
+
+        return jsonify(response_message), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

@@ -563,3 +563,23 @@ def delete_threat_scenario():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/v1/clear/threat_scenario", methods=["DELETE"])
+def clear_threat_scenario():
+    try:
+        model_id = request.form.get("model-id")
+
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        # Delete all Threat_scenarios with the specified model_id
+        threat_result = db.Threat_scenarios.delete_many({"model_id": model_id})
+        response_message = {
+            "message": "Threat scenarios cleared",
+            "threat_scenarios_deleted": threat_result.deleted_count,
+        }
+
+        return jsonify(response_message), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
