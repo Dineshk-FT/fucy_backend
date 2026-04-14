@@ -37,8 +37,8 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_API_KEY = "AIzaSyANn6Xi1TWwIrkzq5aDcr7QLoyelxc4-tg"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 # Path to dataecu.json — adjust to match your project layout
