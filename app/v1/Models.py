@@ -360,6 +360,7 @@ collections_to_clear = [
     "Risk_treatment"
 ]
 
+
 @app.route("/v1/clear_model_data", methods=["POST"])
 def clear_model_data():
     try:
@@ -382,6 +383,40 @@ def clear_model_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
+
+@app.route("/v1/delete_model_data", methods=["POST"])
+def delete_model_data():
+    try:
+        model_id = request.form.get("modelId")
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        deleted_counts = {}
+
+        # Handle Models collection separately (using _id)
+        try:
+            from bson.objectid import ObjectId
+            models_result = db["Models"].delete_one({"_id": ObjectId(model_id)})
+            deleted_counts["Models"] = models_result.deleted_count
+        except Exception as e:
+            # If model_id is not a valid ObjectId format
+            deleted_counts["Models"] = 0
+            # Optionally log the error
+
+        # Go through other collections and delete docs with model_id field
+        for collection in collections_to_clear:
+
+            result = db[collection].delete_many({"model_id": model_id})
+            deleted_counts[collection] = result.deleted_count
+
+        return jsonify({
+            "message": f"Data cleared for model_id {model_id}",
+            "deleted_counts": deleted_counts
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+     
 tara_data = {}
 
 @app.route("/v1/taraModel/store", methods=["POST"])

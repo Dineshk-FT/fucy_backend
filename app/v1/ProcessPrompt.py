@@ -10,11 +10,11 @@ import google.generativeai as genai
 
 
 app = Blueprint("prompt", __name__)
-
-
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 # =================Gemini============================
 genai.configure(api_key=GOOGLE_API_KEY)
+
+
 
 def validate_and_fix_attack_data(attack_data, prompt_key):
     """Ensure attack_data has the complete structure"""

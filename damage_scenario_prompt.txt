@@ -27,7 +27,7 @@ CWE (root weakness) → CAPEC (attack pattern) → MITRE ATT&CK technique → AT
 
 SYSTEM REQUEST:
 
-        SYSTEM REQUEST: Generate cybersecurity damage scenarios for the Battery Management system ECU system.
+        SYSTEM REQUEST: Generate cybersecurity damage scenarios for the Battery Management System ECu system.
         
         
         IMPORTANT: The following system architecture has already been defined.
@@ -36,83 +36,83 @@ SYSTEM REQUEST:
         Existing Components (with their IDs):
         [
   {
-    "id": "bms-group-uuid",
+    "id": "bms-group-e7f0-4a8b-a3d8-5f9e2b1c4d6a",
     "label": "Battery Management System",
     "type": "group"
   },
   {
-    "id": "mcu-group-uuid-8082874e-707c-4bc8-94fe-627ee4e4a3ba",
-    "label": "BMS MCU Block",
+    "id": "8082874e-707c-4bc8-94fe-627ee4e4a3ba",
+    "label": "8082874e-707c-4bc8-94fe-627ee4e4a3ba",
     "type": "group"
   },
   {
-    "id": "battery-pack-uuid",
-    "label": "BatteryPack",
-    "type": "default"
-  },
-  {
-    "id": "cell-monitoring-uuid",
+    "id": "node-cell-monitoring-b9d1-4e7a-a2f0-1c2b3d4e5f6a",
     "label": "CellMonitoring",
     "type": "default"
   },
   {
-    "id": "io-analog-uuid",
+    "id": "node-io-analog-f8c7-4d6b-b1e0-2c3d4e5f6a7b",
     "label": "IO and Analog",
     "type": "default"
   },
   {
-    "id": "code-flash-uuid",
-    "label": "Code Flash",
-    "type": "default"
-  },
-  {
-    "id": "data-flash-uuid",
-    "label": "Data Flash",
-    "type": "default"
-  },
-  {
-    "id": "keys-uuid",
-    "label": "Keys",
-    "type": "default"
-  },
-  {
-    "id": "certificates-uuid",
-    "label": "Certificates",
-    "type": "default"
-  },
-  {
-    "id": "debug-port-uuid",
-    "label": "Debug Port",
-    "type": "default"
-  },
-  {
-    "id": "can-transceiver-uuid",
+    "id": "node-can-transceiver-a2b3-4c5d-d6e7-8f9a0b1c2d3e",
     "label": "CAN Transceiver",
     "type": "default"
   },
   {
-    "id": "icd-shunt-can-uuid",
+    "id": "node-icd-shunt-can-e5f6-4a7b-b8c9-d0e1f2a3b4c5",
     "label": "ICD Shunt CAN",
     "type": "default"
   },
   {
-    "id": "soc-uuid",
+    "id": "data-soc-c1d2-4e3f-a5b6-7c8d9e0f1a2b",
     "label": "SoC",
     "type": "data"
   },
   {
-    "id": "soh-uuid",
+    "id": "data-soh-a3b4-4c5d-e6f7-8a9b0c1d2e3f",
     "label": "SoH",
     "type": "data"
   },
   {
-    "id": "vehicle-system-uuid",
+    "id": "node-code-flash-d4e5-4f6a-b7c8-9d0e1f2a3b4c",
+    "label": "Code Flash",
+    "type": "default"
+  },
+  {
+    "id": "node-data-flash-f6a7-4b8c-c9d0-e1f2a3b4c5d6",
+    "label": "Data Flash",
+    "type": "default"
+  },
+  {
+    "id": "node-keys-b8c9-4d0e-e1f2-a3b4c5d6e7f8",
+    "label": "Keys",
+    "type": "default"
+  },
+  {
+    "id": "node-certificates-d0e1-4f2a-b3c4-5d6e7f8a9b0c",
+    "label": "Certificates",
+    "type": "default"
+  },
+  {
+    "id": "node-debug-port-e1f2-4a3b-b4c5-d6e7f8a9b0c1",
+    "label": "Debug Port",
+    "type": "default"
+  },
+  {
+    "id": "node-vehicle-system-g1h2-i3j4-k5l6-m7n8o9p0q1r2",
     "label": "Vehicle System",
     "type": "default"
   },
   {
-    "id": "cloud-uuid",
+    "id": "node-cloud-s3t4-u5v6-w7x8-y9z0a1b2c3d4",
     "label": "Cloud",
+    "type": "default"
+  },
+  {
+    "id": "node-battery-pack-g5h6-i7j8-k9l0-m1n2o3p4q5r6",
+    "label": "BatteryPack",
     "type": "default"
   }
 ]
@@ -121,10 +121,6 @@ SYSTEM REQUEST:
         Generate realistic damage scenarios following ISO/SAE 21434 Clause 15.
         Each damage scenario must reference specific components from the architecture above.
         
-
-Additional User Requirements:
-Generate damage scenarios for the system.
-Include: name, description, affected component, cyber losses (CIAA), and impact ratings (Safety, Financial, Operational, Privacy).
 
 CYBERSECURITY KNOWLEDGE CONTEXT:
 
@@ -463,7 +459,3 @@ CONSTRAINTS
 - Use threat reasoning from CWE, MITRE, CAPEC, ATM — not from REPORTS_DB examples.
 
 Return JSON only. Start the response with '{'.
-
-User Requirements:
-Generate damage scenarios for the system.
-Include: name, description, affected component, cyber losses (CIAA), and impact ratings (Safety, Financial, Operational, Privacy).

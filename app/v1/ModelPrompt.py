@@ -5,7 +5,7 @@ import re
 from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
-from app.Methods.helpers import build_full_edge, build_basic_node,calculate_node_positions,structure_attack_tree_templates,AttackTableoptions,threat_type,safe_json_parse
+from app.Methods.helpers import adjust_group_sizes, build_full_edge, build_basic_node, calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes, structure_attack_tree_templates, AttackTableoptions, threat_type, safe_json_parse
 from app.v1.gemini.main import GeminiClient
 import random
 import os
@@ -27,6 +27,8 @@ from app.v1.rag.main import (
     build_enriched_query,
 )
 
+
+
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
         if isinstance(o, ObjectId):
@@ -35,12 +37,20 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = "AIzaSyANn6Xi1TWwIrkzq5aDcr7QLoyelxc4-tg"
 gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 # Path to dataecu.json — adjust to match your project layout
 ECU_DB_PATH = os.getenv("ECU_DB_PATH", "datasets/dataecu.json")
 
+@modelprompt.route("/get/key", methods=["GET"])
+def get_google_api_key():
+    """Endpoint to retrieve the Google API key (for frontend use)"""
+    if GOOGLE_API_KEY:
+        return jsonify({"googleApiKey": GOOGLE_API_KEY})
+    else:
+        return jsonify({"error": "Google API key not configured"}), 500
 
 #1- Prompt template for label creation (inputs for the model)
 def build_prompt(system_name, user_prompt=None):
@@ -317,65 +327,79 @@ Additional Requirements: {custom_prompt}
         if not isinstance(minimal_nodes, list) or not isinstance(minimal_edges, list):
             raise ValueError("Invalid response format from Gemini - nodes/edges must be lists")
 
-        print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
+        # print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
 
-        # ── Build full ReactFlow-ready template with enhanced node data ─────
-        # Process nodes to ensure they have all required fields
-        # processed_nodes = []
-        # for node in minimal_nodes:
-        #     processed_node = {
-        #         "id": node.get("id", str(uuid.uuid4())),
-        #         "type": node.get("type", "default"),
-        #         "parentId": node.get("parentId"),
-        #         "data": {
-        #             "label": node.get("data", {}).get("label", ""),
-        #             "description": node.get("data", {}).get("description", ""),
-        #             "style": {
-        #                 "backgroundColor": node.get("data", {}).get("style", {}).get("backgroundColor", "#dadada"),
-        #                 "borderColor": node.get("data", {}).get("style", {}).get("borderColor", "gray"),
-        #                 "borderStyle": "solid",
-        #                 "borderWidth": "2px",
-        #                 "color": "black",
-        #                 "fontFamily": "Inter",
-        #                 "fontSize": "12px",
-        #                 "fontWeight": 500,
-        #                 "height": node.get("data", {}).get("style", {}).get("height", 50),
-        #                 "width": node.get("data", {}).get("style", {}).get("width", 150)
-        #             }
-        #         },
-        #         "properties": node.get("properties", []),
-        #         "isAsset": node.get("isAsset", False),
-        #         "width": node.get("width", 150),
-        #         "height": node.get("height", 50),
-        #         "position": node.get("position", {"x": 0, "y": 0}),
-        #         "positionAbsolute": node.get("positionAbsolute", {"x": 0, "y": 0}),
-        #         "zIndex": node.get("zIndex", 0)
-        #     }
-        #     processed_nodes.append(processed_node)
-        
+        # In generate_reactflow_template, update the processed_nodes section:
+
+        processed_nodes = []
+        for node in minimal_nodes:
+            # Get existing style or create default
+            node_style = node.get("data", {}).get("style", {})
+            
+            processed_node = {
+                "id": node.get("id", str(uuid.uuid4())),
+                "type": node.get("type", "default"),
+                "parentId": node.get("parentId"),
+                "data": {
+                    "label": node.get("data", {}).get("label", ""),
+                    "description": node.get("data", {}).get("description", ""),
+                    "style": {
+                        "backgroundColor": node_style.get("backgroundColor", "#f0f0f0"),
+                        "borderColor": node_style.get("borderColor", "gray"),
+                        "borderStyle": node_style.get("borderStyle", "solid"),
+                        "borderWidth": node_style.get("borderWidth", "2px"),
+                        "color": node_style.get("color", "black"),
+                        "fontFamily": node_style.get("fontFamily", "Inter"),
+                        "fontSize": node_style.get("fontSize", "12px"),
+                        "fontWeight": node_style.get("fontWeight", 500),
+                        "height": node.get("data", {}).get("style", {}).get("height", 50),
+                        "width": node.get("data", {}).get("style", {}).get("width", 150)
+                    }
+                },
+                "properties": node.get("properties", []),
+                "isAsset": node.get("isAsset", False),
+                "width": node.get("width", 150),
+                "height": node.get("height", 50),
+                "position": node.get("position", {"x": 0, "y": 0}),
+                "positionAbsolute": node.get("positionAbsolute", {"x": 0, "y": 0}),
+                "zIndex": node.get("zIndex", 0)
+            }
+            processed_nodes.append(processed_node)
         # Calculate node positions for better layout
-        # from app.Methods.helpers import calculate_node_positions
-        # positioned_nodes = calculate_node_positions(processed_nodes)
+        from app.Methods.helpers import calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes
+
+        # Build basic nodes with proper sizing
+        basic_nodes = [build_basic_node(node) for node in minimal_nodes]
+
+        # Adjust group sizes based on children
+        adjusted_nodes = adjust_group_sizes(basic_nodes)
+        positioned_nodes = calculate_node_positions(adjusted_nodes)
+
+        # Trim group heights to actual content — removes empty space at the bottom
+        positioned_nodes = recalculate_group_heights_from_children(positioned_nodes)
+
+        # Now place ungrouped nodes just below the trimmed groups (no inflated gap)
+        positioned_nodes = position_ungrouped_nodes(positioned_nodes)
 
         # Process edges with default values
-        # normalized_edges = []
-        # for e in minimal_edges:
-        #     edge = dict(e)
-        #     edge.setdefault("sourceHandle", "bottom")
-        #     edge.setdefault("targetHandle", "top")
-        #     edge.setdefault("type", "step")
-        #     edge.setdefault("animated", True)
-        #     edge.setdefault("markerEnd", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18})
-        #     edge.setdefault("markerStart", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18, "orient": "auto-start-reverse"})
-        #     edge.setdefault("style", {"stroke": "#808080", "strokeWidth": 2, "end": True, "start": True})
-        #     normalized_edges.append(edge)
+        normalized_edges = []
+        for e in minimal_edges:
+            edge = dict(e)
+            edge.setdefault("sourceHandle", "bottom")
+            edge.setdefault("targetHandle", "top")
+            edge.setdefault("type", "step")
+            edge.setdefault("animated", True)
+            edge.setdefault("markerEnd", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18})
+            edge.setdefault("markerStart", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18, "orient": "auto-start-reverse"})
+            edge.setdefault("style", {"stroke": "#808080", "strokeWidth": 2, "end": True, "start": True})
+            normalized_edges.append(edge)
 
-        # from app.Methods.helpers import build_full_edge
-        # full_edges = [build_full_edge(e) for e in normalized_edges]
+        from app.Methods.helpers import build_full_edge
+        full_edges = [build_full_edge(e) for e in normalized_edges]
 
         final_template = {
-            "nodes": minimal_nodes,
-            "edges": minimal_edges,
+            "nodes": positioned_nodes,
+            "edges": full_edges,
         }
 
         # ── Generate Derivations and Details using helper function ───────────
@@ -909,14 +933,25 @@ def create_threat_scenarios(model_id=None):
         return jsonify({"error in threat scenario": str(e)}), 500
 
 
-#threat creation
-def extract_json_from_text(text: str) -> str:
+# Helper function to extract JSON from text (implement based on your needs)
+def extract_json_from_text(text):
     """
-    Extracts JSON part from Gemini response text.
-    Assumes JSON is enclosed in braces {} or brackets [].
+    Extract JSON from text that might contain markdown or other formatting.
     """
-    match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
-    return match.group(1) if match else text
+    if not text:
+        return "{}"
+    
+    # Remove markdown code blocks
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    
+    # Find JSON object or array
+    json_match = re.search(r'(\{.*\}|\[.*\])', text, re.DOTALL)
+    if json_match:
+        return json_match.group(1)
+    
+    return text
+
 
 
 def group_threats_by_node(threat_ids):
@@ -926,14 +961,13 @@ def group_threats_by_node(threat_ids):
         grouped[key].append(threat)
     return grouped
 
-
-# Derived threat scenario creation
-def generate_single_derived_scenario(threat_group, user_prompt=None):
+def generate_single_derived_scenario(threat_group, user_prompt=None, max_retries=2):
     """
     Generate a derived threat scenario name + description from a group of threats.
     If user_prompt is provided, it replaces the intro part of the prompt.
+    Includes retry logic for JSON parsing failures.
     """
-
+    
     default_intro = f"""
         You are a cybersecurity expert. Based on the following related threats, generate a meaningful name and a concise description for a derived threat scenario. Do not use generic names like "Derived Threat Scenario".
 
@@ -943,58 +977,99 @@ def generate_single_derived_scenario(threat_group, user_prompt=None):
 
     prompt_intro = user_prompt if user_prompt else default_intro
 
-    prompt = f"""
-        {prompt_intro}
+    for attempt in range(max_retries + 1):
+        try:
+            prompt = f"""
+                {prompt_intro}
 
-        (for Data structure)
-        Each threat includes:
-        - `nodeId`: the component or function
-        - `propId`: the impacted property (can be ignored)
-        - `rowId`: the related damage scenario
+                (for Data structure)
+                Each threat includes:
+                - `nodeId`: the component or function
+                - `propId`: the impacted property (can be ignored)
+                - `rowId`: the related damage scenario
 
-        Return only a JSON object with:
-        - name: (string) → A short, meaningful, human-readable title for the derived threat scenario
-        - description: (string) → A concise natural-language summary of the combined threats.
-        Do NOT return an array, object, or repeat the input JSON.
-        The description should read like a human-written explanation,
-        not raw data.
-    """
+                Return only a JSON object with:
+                - name: (string) → A short, meaningful, human-readable title for the derived threat scenario
+                - description: (string) → A concise natural-language summary of the combined threats.
+                Do NOT return an array, object, or repeat the input JSON.
+                The description should read like a human-written explanation,
+                not raw data.
+            """
 
-    gemini_response = gemini_client.generate_content(prompt)
-    try:
-        content_text = gemini_client.get_text(gemini_response)
+            gemini_response = gemini_client.generate_content(prompt)
+            content_text = gemini_client.get_text(gemini_response)
 
-        cleaned = extract_json_from_text(content_text)
-        cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
-        cleaned = cleaned.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-        cleaned = re.sub(r",\s*}", "}", cleaned)
-        cleaned = re.sub(r",\s*]", "]", cleaned)
+            # Clean and parse JSON
+            cleaned = extract_json_from_text(content_text)
+            cleaned = re.sub(r'[\x00-\x1F\x7F]', '', cleaned)
+            cleaned = cleaned.strip()
+            
+            # Remove markdown code blocks if present
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r'^```\w*\n?', '', cleaned)
+                cleaned = re.sub(r'\n?```$', '', cleaned)
+            
+            # Fix common JSON issues
+            cleaned = re.sub(r',\s*}', '}', cleaned)  # Remove trailing commas in objects
+            cleaned = re.sub(r',\s*]', ']', cleaned)  # Remove trailing commas in arrays
+            cleaned = re.sub(r'([{,])\s*\'', r'\1"', cleaned)  # Replace single quotes with double quotes
+            cleaned = re.sub(r'\'\s*:', '":', cleaned)  # Fix keys with single quotes
+            
+            # Try to extract JSON if there's extra text
+            json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+            if json_match:
+                cleaned = json_match.group(0)
+            
+            parsed = json.loads(cleaned)
 
-        parsed = json.loads(cleaned)
+            # Ensure description is a string
+            description = parsed.get("description", "")
+            if not isinstance(description, str):
+                if isinstance(description, list):
+                    description = " ".join(str(item) for item in description)
+                else:
+                    description = json.dumps(description, ensure_ascii=False)
 
-        description = parsed.get("description", "")
-        if not isinstance(description, str):
-            if isinstance(description, list):
-                description = " ".join(str(item) for item in description)
+            return {
+                "name": parsed.get("name", "Unnamed Derived Threat"),
+                "description": description
+            }
+            
+        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+            if attempt < max_retries:
+                print(f"⚠️ Attempt {attempt + 1} failed for JSON parsing. Retrying...")
+                print(f"   Error: {str(e)}")
+                print(f"   Raw text preview: {content_text[:200]}...")
+                # Modify prompt for retry to emphasize JSON format
+                user_prompt = f"""
+                    {prompt_intro}
+                    
+                    IMPORTANT: You MUST return ONLY valid JSON. No markdown, no extra text, no explanations.
+                    The response must be exactly in this format:
+                    {{"name": "Your scenario name here", "description": "Your description here"}}
+                    
+                    Previous attempt failed with error: {str(e)}
+                    Make sure your response is valid JSON with no trailing commas or unescaped characters.
+                """
+                continue
             else:
-                description = json.dumps(description, ensure_ascii=False)
-
-        return {
-            "name": parsed.get("name", "Unnamed Derived Threat"),
-            "description": description
-        }
-
-    except Exception as e:
-        print("⚠️ Failed JSON parse, falling back. Raw text:\n", content_text)
-        raise ValueError(f"Failed to parse Gemini response: {str(e)}")
+                print("⚠️ Failed to parse Gemini response after all retries. Raw text:\n", content_text)
+                # Return a fallback instead of raising exception
+                return {
+                    "name": "Generated Derived Threat",
+                    "description": f"Derived from {len(threat_group)} related threats. (Auto-generated due to parsing error)"
+                }
 
 
 def generate_derived_threat_scenarios(model_id, threat_ids, name="", description="", user_prompt=None):
+    """
+    Generate derived threat scenarios with graceful error handling.
+    Returns saved document even if some individual scenarios fail.
+    """
     details = []
-
+    
     if name or description:
+        # User provided explicit name/description
         if not isinstance(description, str):
             if isinstance(description, list):
                 description = " ".join(str(item) for item in description)
@@ -1009,46 +1084,96 @@ def generate_derived_threat_scenarios(model_id, threat_ids, name="", description
         }
         details.append(derived)
     else:
-        grouped = group_threats_by_node(threat_ids)
-        for group in grouped.values():
-            result = generate_single_derived_scenario(group, user_prompt)
-
-            description = result.get("description", "")
-            if not isinstance(description, str):
-                if isinstance(description, list):
-                    description = " ".join(str(item) for item in description)
-                else:
-                    description = json.dumps(description, ensure_ascii=False)
-
-            derived = {
-                "name": result.get("name", "Unnamed Derived Threat"),
-                "description": description,
+        # Auto-generate derived scenarios from threat groups
+        try:
+            grouped = group_threats_by_node(threat_ids)
+            print(f"[INFO] Grouped {len(threat_ids)} threats into {len(grouped)} groups")
+            
+            for group_key, group in grouped.items():
+                try:
+                    print(f"[INFO] Generating derived scenario for group: {group_key}")
+                    result = generate_single_derived_scenario(group, user_prompt)
+                    
+                    description_text = result.get("description", "")
+                    if not isinstance(description_text, str):
+                        if isinstance(description_text, list):
+                            description_text = " ".join(str(item) for item in description_text)
+                        else:
+                            description_text = json.dumps(description_text, ensure_ascii=False)
+                    
+                    derived = {
+                        "name": result.get("name", "Unnamed Derived Threat"),
+                        "description": description_text,
+                        "id": str(uuid.uuid4()),
+                        "threat_ids": group
+                    }
+                    details.append(derived)
+                    print(f"[SUCCESS] Generated: {derived['name']}")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to generate derived scenario for group {group_key}: {str(e)}")
+                    traceback.print_exc()
+                    
+                    # Create a fallback entry to indicate failure but maintain data structure
+                    derived = {
+                        "name": "Generation Failed - Retry",
+                        "description": f"Failed to generate derived scenario due to: {str(e)[:200]}. Please try again or provide manually.",
+                        "id": str(uuid.uuid4()),
+                        "threat_ids": group,
+                        "generation_error": True
+                    }
+                    details.append(derived)
+                    continue
+                    
+        except Exception as e:
+            print(f"[CRITICAL] Error in grouping threats: {str(e)}")
+            traceback.print_exc()
+            # Create a single fallback derived scenario for all threats
+            details.append({
+                "name": "Bulk Derived Threat",
+                "description": f"Derived from {len(threat_ids)} threats. Auto-generated due to processing error: {str(e)[:200]}",
                 "id": str(uuid.uuid4()),
-                "threat_ids": group
-            }
-            details.append(derived)
-
+                "threat_ids": threat_ids,
+                "generation_error": True
+            })
+    
+    # Save to database if we have any details (even if some failed)
     if details:
         document = {
             "model_id": model_id,
             "type": "User-defined",
-            "Details": details
+            "Details": details,
+            "generated_at": time.time(),
+            "total_derived": len(details),
+            "failed_count": sum(1 for d in details if d.get("generation_error", False))
         }
-        db.Threat_scenarios.replace_one(
-            {"model_id": model_id, "type": "User-defined"},
-            document,
-            upsert=True
-        )
-
-        saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
-        saved_doc["_id"] = str(saved_doc["_id"])
-        return saved_doc
-
+        
+        try:
+            db.Threat_scenarios.replace_one(
+                {"model_id": model_id, "type": "User-defined"},
+                document,
+                upsert=True
+            )
+            
+            saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
+            saved_doc["_id"] = str(saved_doc["_id"])
+            return saved_doc
+        except Exception as e:
+            print(f"[ERROR] Failed to save derived scenarios to database: {str(e)}")
+            # Return the document even if save failed
+            document["_id"] = "unsaved"
+            return document
+    
+    # Return empty dict if no details were generated
     return {}
 
 
 @modelprompt.route('/v1/generate/derived-threat-scenarios', methods=['POST'])
 def create_derived_threat_scenario():
+    """
+    Endpoint to generate derived threat scenarios.
+    Always returns 201 if processing completes (even with errors in individual scenarios).
+    """
     try:
         # Check if the request is JSON
         if request.is_json:
@@ -1067,18 +1192,46 @@ def create_derived_threat_scenario():
             threat_ids = json.loads(threat_ids_raw)
         else:
             threat_ids = threat_ids_raw
+            
         if not model_id or not threat_ids:
             return jsonify({"error": "Missing modelId or threatIds"}), 400
 
+        # Generate derived scenarios (handles errors internally)
         results = generate_derived_threat_scenarios(model_id, threat_ids, name, description, user_prompt)
-        return jsonify(results), 201
+        
+        # Check if we got partial results
+        if results and results.get("Details"):
+            failed_count = results.get("failed_count", 0)
+            if failed_count > 0:
+                return jsonify({
+                    "message": f"Derived scenarios generated with {failed_count} failures",
+                    "data": results,
+                    "partial_success": True
+                }), 201
+            else:
+                return jsonify({
+                    "message": "Derived scenarios generated successfully",
+                    "data": results
+                }), 201
+        else:
+            return jsonify({
+                "error": "No derived scenarios could be generated",
+                "details": "Check logs for more information"
+            }), 500
 
     except Exception as e:
-        return jsonify({"error in derived threat scenario": str(e)}), 500
+        print(f"[ERROR] in create_derived_threat_scenario: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": "Failed to process derived threat scenario request", "details": str(e)}), 500
 
-# Full threat scenario pipeline
+
 @modelprompt.route('/v1/generate/full-threat-scenario', methods=['POST'])
 def create_threat_and_derived_combined():
+    """
+    Combined endpoint that generates both threat scenarios and derived threat scenarios.
+    Threat scenarios are critical, derived scenarios are best-effort.
+    Always returns success if threat scenarios succeed, even if derived scenarios fail.
+    """
     try:
         start_time = time.time()
 
@@ -1087,8 +1240,7 @@ def create_threat_and_derived_combined():
             data = request.get_json()
         else:
             data = request.form
-        # Get JSON data instead of form data
- 
+            
         model_id = data.get('modelId', "")
         name = data.get('name', "")
         description = data.get('description', "")
@@ -1099,74 +1251,147 @@ def create_threat_and_derived_combined():
 
         print(f"\n=== [COMBINED API] STARTED for model {model_id} ===")
 
+        # Step 1: Generate threat scenarios (critical)
         t1 = time.time()
-        threat_response, status_code = create_threat_scenarios(model_id)
-        print(f"[TIMING] Threat scenario generation took {time.time() - t1:.2f}s")
+        try:
+            threat_response, status_code = create_threat_scenarios(model_id)
+            threat_generation_time = time.time() - t1
+            print(f"[TIMING] Threat scenario generation took {threat_generation_time:.2f}s")
+            
+            if status_code != 201:
+                print("[ERROR] Threat scenario generation failed")
+                return threat_response, status_code
+                
+            threat_data = threat_response.get_json() if hasattr(threat_response, 'get_json') else threat_response
+            print(f"[SUCCESS] Threat scenarios created: {len(threat_data.get('scenarios', {}).get('Details', []))}")
+            
+        except Exception as e:
+            print(f"[FATAL] Threat scenario generation failed: {str(e)}")
+            traceback.print_exc()
+            return jsonify({"error": "Threat scenario generation failed", "details": str(e)}), 500
 
-        if status_code != 201:
-            print("[ERROR] Threat scenario generation failed")
-            return threat_response, status_code
-
-        threat_data = threat_response.get_json()
-        print(f"[DEBUG] Threat scenarios created: {len(threat_data.get('scenarios', {}).get('Details', []))}")
-
+        # Step 2: Collect threat IDs for derived scenario generation
         threat_ids = []
-        for threat in threat_data.get("scenarios", {}).get("Details", []):
-            for item in threat.get("Details", []):
-                for prop in item.get("props", []):
-                    threat_ids.append({
-                        "nodeId": item["nodeId"],
-                        "propId": prop["id"],
-                        "rowId": threat["rowId"]
-                    })
-        print(f"[DEBUG] Collected {len(threat_ids)} threatIds for derived generation")
+        try:
+            scenarios = threat_data.get("scenarios", {})
+            details = scenarios.get("Details", [])
+            
+            for threat in details:
+                for item in threat.get("Details", []):
+                    for prop in item.get("props", []):
+                        threat_ids.append({
+                            "nodeId": item["nodeId"],
+                            "propId": prop["id"],
+                            "rowId": threat["rowId"]
+                        })
+            print(f"[INFO] Collected {len(threat_ids)} threatIds for derived generation")
+        except Exception as e:
+            print(f"[WARNING] Failed to collect threat IDs: {str(e)}")
+            threat_ids = []
 
+        # Step 3: Generate derived scenarios (best-effort, non-critical)
         derived_response_json = None
-        derived_status = 500
-
-        t2 = time.time()
+        derived_status = None
+        derived_generation_time = 0
         
-        # For the internal call, you might need to use JSON instead of MultiDict
-        with current_app.test_request_context(
-            "/v1/generate/derived-threat-scenario",
-            method="POST",
-            data=MultiDict({
-                "modelId": model_id,
-                "name": name,
-                "description": description,
-                "threatScenarioPrompt": user_prompt,
-                "threatIds": json.dumps(threat_ids)
-            })
-        ):
+        if threat_ids:
+            t2 = time.time()
             try:
-                print("[INFO] Calling create_derived_threat_scenario()...")
-                derived_response, derived_status = create_derived_threat_scenario()
-                if hasattr(derived_response, "get_json"):
-                    derived_response_json = derived_response.get_json()
-                print(f"[TIMING] Derived threat scenario generation took {time.time() - t2:.2f}s")
+                # Create request data for derived scenario generation
+                derived_request_data = {
+                    "modelId": model_id,
+                    "name": name,
+                    "description": description,
+                    "threatScenarioPrompt": user_prompt,
+                    "threatIds": threat_ids
+                }
+                
+                # Call the derived scenario generation function directly
+                # This avoids request context issues
+                derived_result = generate_derived_threat_scenarios(
+                    model_id=model_id,
+                    threat_ids=threat_ids,
+                    name=name,
+                    description=description,
+                    user_prompt=user_prompt
+                )
+                
+                derived_generation_time = time.time() - t2
+                print(f"[TIMING] Derived threat scenario generation took {derived_generation_time:.2f}s")
+                
+                if derived_result:
+                    derived_response_json = derived_result
+                    derived_status = 201
+                    failed_count = derived_result.get("failed_count", 0)
+                    if failed_count > 0:
+                        print(f"[WARNING] Derived scenarios generated with {failed_count} failures")
+                    else:
+                        print("[SUCCESS] All derived scenarios generated successfully")
+                else:
+                    derived_response_json = {"error": "No derived scenarios generated"}
+                    derived_status = 500
+                    
             except Exception as e:
-                print("[ERROR] Derived threat scenario generation failed:", str(e))
+                derived_generation_time = time.time() - t2
+                print(f"[WARNING] Derived threat scenario generation failed: {str(e)}")
                 traceback.print_exc()
+                derived_response_json = {
+                    "error": "Derived scenario generation failed",
+                    "details": str(e),
+                    "partial": True
+                }
+                derived_status = 500
+        else:
+            print("[INFO] No threat IDs available, skipping derived scenario generation")
+            derived_response_json = {"message": "No threats to generate derived scenarios from"}
+            derived_status = 204
 
         total_time = time.time() - start_time
         print(f"=== [COMBINED API] FINISHED in {total_time:.2f}s ===\n")
 
-        return jsonify({
-            "message": "Threat + Derived Threat scenarios created successfully",
+        # Always return success if threat scenarios were generated
+        response_data = {
+            "message": "Threat scenarios created successfully",
             "threat_scenarios": threat_data,
             "derived_threat_scenarios": derived_response_json,
-            "derived_status": derived_status,
             "timing": {
-                "threat_generation_sec": round(time.time() - t1, 2),
-                "derived_generation_sec": round(time.time() - t2, 2),
+                "threat_generation_sec": round(threat_generation_time, 2),
+                "derived_generation_sec": round(derived_generation_time, 2),
                 "total_sec": round(total_time, 2)
             }
-        }), 201
+        }
+        
+        # Add warning if derived scenarios failed
+        if derived_status != 201:
+            response_data["warning"] = "Derived threat scenarios could not be generated or were partially generated"
+            response_data["derived_status"] = derived_status
+        
+        return jsonify(response_data), 201
 
     except Exception as e:
         print("[FATAL ERROR in combined API]:", str(e))
         traceback.print_exc()
-        return jsonify({"error": "Error in combined API", "details": str(e)}), 500
+        return jsonify({
+            "error": "Unexpected error in combined API", 
+            "details": str(e)
+        }), 500
+
+
+# Helper function to group threats by node (implement based on your needs)
+def group_threats_by_node(threat_ids):
+    """
+    Group threat IDs by nodeId.
+    Returns a dictionary with nodeId as key and list of threats as value.
+    """
+    grouped = {}
+    for threat in threat_ids:
+        node_id = threat.get("nodeId", "unknown")
+        if node_id not in grouped:
+            grouped[node_id] = []
+        grouped[node_id].append(threat)
+    return grouped
+
+
 
 #5 - Attack Scenario Creation
 def preprocess_threat_scenarios(threat_scenarios):
@@ -2022,3 +2247,94 @@ def generate_full_model():
 def clean_control_chars(s):
     # Remove unescaped control characters (except \n, \t if you want to keep them)
     return re.sub(r'[\x00-\x1F\x7F]', '', s)
+
+# Add this to your ModelPrompt.py file
+
+@modelprompt.route('/v1/generate/item-and-damage', methods=['POST'])
+def generate_item_and_damage():
+    """
+    Generate both item definition (template) and damage scenarios in a single call.
+    Similar to generate_full_model but only for item definition and damage scenarios.
+    """
+    try:
+        print("\n" + "="*80)
+        print("GENERATING ITEM DEFINITION AND DAMAGE SCENARIOS")
+        print("="*80 + "\n")
+        
+        # ── Generate Item Definition (Template) ──────────────────────────────
+        print("Step 1: Generating Item Definition...")
+        template_response = generate_reactflow_template(standalone=True, request_data=request)
+        start_time = time.time()
+        model_id = template_response['model_id']
+        system_name = template_response['system_name']
+        
+        print(f"✓ Item Definition generated")
+        print(f"  Model ID: {model_id}")
+        print(f"  Nodes: {len(template_response['template'].get('nodes', []))}")
+        print(f"  Edges: {len(template_response['template'].get('edges', []))}")
+        
+        # ── Generate Damage Scenarios ────────────────────────────────────────
+        print("\nStep 2: Generating Damage Scenarios...")
+        
+        # Prepare request data for damage scenarios
+        damage_request_data = {
+            'modelId': model_id,
+            'systemName': system_name,
+            'template': json.dumps(template_response['template']),
+            'damageScenarioPrompt': request.form.get('damageScenarioPrompt', '') if not request.is_json else request.get_json().get('damageScenarioPrompt', ''),
+            'itemDefinitionPrompt': request.form.get('itemDefinitionPrompt', '') if not request.is_json else request.get_json().get('itemDefinitionPrompt', ''),
+        }
+        
+        # Also pass dynamic fields from the original request
+        if request.is_json:
+            data = request.get_json()
+            static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "damageScenarioPrompt", "modelId"}
+            for key, value in data.items():
+                if key not in static_fields:
+                    damage_request_data[key] = value
+        else:
+            for key, value in request.form.items():
+                if key not in ["createdBy", "systemName", "itemDefinitionPrompt", "damageScenarioPrompt", "modelId"]:
+                    damage_request_data[key] = value
+        
+        # Create a mock request object for damage scenario generation
+        class MockRequest:
+            def __init__(self, data):
+                self.form = MultiDict(data)
+                self.is_json = False
+        
+        mock_request = MockRequest(damage_request_data)
+        
+        # Generate damage scenarios
+        scenarios_response = create_damage_scenarios_with_rag(standalone=True, request_data=mock_request)
+        
+        print(f"✓ Damage Scenarios generated")
+        print(f"  Total scenarios: {scenarios_response.get('stats', {}).get('total_scenarios', 0)}")
+        
+        # ── Return combined response ─────────────────────────────────────────
+        total_time = time.time() - start_time if 'start_time' in dir() else 0
+        
+        result_data = {
+            "message": "Item definition and damage scenarios generated successfully",
+            "model_id": model_id,
+            "system_name": system_name,
+            "template": template_response['template'],
+            "damage_scenarios": scenarios_response.get('scenarios', {}),
+            "stats": {
+                "nodes_count": len(template_response['template'].get('nodes', [])),
+                "edges_count": len(template_response['template'].get('edges', [])),
+                "damage_scenarios_count": scenarios_response.get('stats', {}).get('total_scenarios', 0),
+                "generation_time_sec": round(total_time, 2)
+            }
+        }
+        
+        return current_app.response_class(
+            response=json.dumps(result_data, cls=JSONEncoder),
+            status=201,
+            mimetype="application/json",
+        )
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error in item and damage generation": str(e)}), 500
