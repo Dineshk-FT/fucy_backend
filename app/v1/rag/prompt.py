@@ -1,229 +1,331 @@
 # =============================================================================
-# prompt.py — TARA generation prompt template
+# prompt.py — TARA generation prompt templates (Multi-Agent Pipeline)
+# =============================================================================
+#
+# Each pipeline agent uses its own specialized prompt:
+#   Architect Agent  → ARCHITECT_PROMPT  → System architecture (nodes, edges, Details)
+#   Threat Analyst   → THREAT_PROMPT     → Threat derivations with nodeId refs
+#   Damage Analyst   → DAMAGE_PROMPT     → Damage impact assessments
+#
+# TARA_PROMPT_TEMPLATE is retained for backward compatibility but is NOT
+# called by any pipeline node. See the individual agent prompts below.
 # =============================================================================
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REFERENCE SCHEMA (imported by pipeline.py but NOT rendered by any node)
+# ─────────────────────────────────────────────────────────────────────────────
+
 TARA_PROMPT_TEMPLATE = """
-You are an automotive cybersecurity analyst performing Threat Analysis and Risk Assessment (TARA)
-according to ISO/SAE 21434 Clause 15.
+[REFERENCE ONLY — This template is not used by any pipeline node.]
 
-Your task is to generate a system architecture model and cybersecurity damage scenarios
-for the requested automotive ECU or system.
+The final assembled TARA JSON structure (built by the evaluate() node from
+individual agent outputs) follows this schema:
 
-STRICT KNOWLEDGE RULES
+{
+  "Models":            [{ "_id": "...", "name": "SystemName" }],
+  "Assets":            [{ "template": { "nodes": [...], "edges": [...] }, "Details": [...] }],
+  "Damage_scenarios":  [{ "Derivations": [...], "Details": [...] }],
+  "Threat_scenarios":  [{ "Details": [{ "rowId": "...", "id": "DS001", "Details": [...] }] }],
+  "Attacks":           [{ "type": "attack_trees", "scenes": [...] }]
+}
+"""
 
-- Use ONLY information relevant to the TARGET SYSTEM specified in the SYSTEM REQUEST below.
-- Do NOT invent assets or components that are not part of the targeted system.
-- If an AUTHORITATIVE ASSET LIST is provided in the request, generate EXACTLY those assets — no additions, no omissions.
-  All damage scenarios, derivations, and edges must reference ONLY those listed assets.
-- REPORTS_DB entries show real reference architectures. If the TARGET SYSTEM matches a REPORTS_DB system
-  (e.g. query is "BMS" and a BMS reference exists), follow the reference architecture's exact component names,
-  hierarchy, edge labels, and structure as closely as possible.
-- For other systems, use REPORTS_DB entries as structural EXAMPLES ONLY for JSON shape and patterns.
-- Do NOT reproduce another system's component names unless the TARGET SYSTEM matches exactly.
-- Use realistic automotive architecture relevant to the TARGET SYSTEM only.
-- Prefer knowledge retrieved from cybersecurity context (ISO 21434, CWE, CAPEC, MITRE, ATM).
-- If information is missing, infer only common industry-standard components for the specified system.
 
-Threat reasoning must follow:
-CWE (root weakness) → CAPEC (attack pattern) → MITRE ATT&CK technique → ATM relevance → Damage Scenario
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. ARCHITECT AGENT
+# ─────────────────────────────────────────────────────────────────────────────
 
--------------------------------------------------
+ARCHITECT_PROMPT = """
+You are a Principal Automotive Systems Architect specializing in ISO 21434 TARA.
 
-SYSTEM REQUEST:
-{{question}}
+SYSTEM TO ARCHITECT: {{ question }}
 
-CYBERSECURITY KNOWLEDGE CONTEXT:
+{% if bms_context %}
+### REFERENCE BMS ARCHITECTURE (from Azure):
+{{ bms_context }}
+{% endif %}
+
+### RETRIEVED CYBERSECURITY & REFERENCE CONTEXT:
 {% for doc in documents %}
-[{{ doc.meta.source }}{% if doc.meta.section_id is defined %} § {{ doc.meta.section_id }}{% endif %}{% if doc.meta.type is defined %} | {{ doc.meta.type }}{% endif %}]
+[{{ doc.meta.source }}]
 {{ doc.content }}
 ---
 {% endfor %}
 
--------------------------------------------------
+### CRITICAL REQUIREMENT - EXACT COUNTS:
+⚠️ YOU MUST GENERATE EXACTLY {{ max_nodes }} COMPONENT NODES (type "default" or "data").
+⚠️ YOU MUST GENERATE EXACTLY {{ max_edges }} EDGES (connections between nodes).
+⚠️ YOU MUST GENERATE NO MORE THAN {{ max_groups }} GROUP CONTAINERS (type "group").
+- Groups (type "group") DO NOT count toward the {{ max_nodes }} limit.
+- Count your component nodes before outputting. If you have more or less than {{ max_nodes }}, REGENERATE.
+- Count your edges before outputting. If you have more or less than {{ max_edges }}, REGENERATE.
+- Count your groups. If you have more than {{ max_groups }} groups, REGENERATE.
 
-ARCHITECTURE RULES
+### YOUR TASK:
+Design a professional-grade system architecture for "{{ question }}" with:
+- EXACTLY {{ max_nodes }} component nodes (excluding groups)
+- EXACTLY {{ max_edges }} edges
+- NO MORE THAN {{ max_groups }} group containers for organization (1-{{ max_groups }} groups is acceptable)
 
-The architecture uses a nested group/container hierarchy:
+{% if bms_context %}
+⚠️ USE THE REFERENCE BMS ARCHITECTURE ABOVE AS YOUR EXACT TEMPLATE.
+Copy the same number of nodes, same types, same edge patterns.
+{% endif %}
 
-1. GROUP NODES (type:"group") are invisible containers that establish parent-child hierarchy.
-   - The top-level system (e.g. "Battery Management System") is a group with parentId:null.
-   - Sub-systems (e.g. MCU block) are groups nested inside the top-level group.
-   - Group nodes have a dashed-border style, NOT a solid backgroundColor.
+### ARCHITECTURE RULES:
 
-2. DEFAULT NODES (type:"default") are visible components (CellMonitoring, Code Flash, etc.).
-   - Each default node has a parentId pointing to its containing group.
-   - External entities (BatteryPack, Vehicle System, Cloud) have parentId:null (outside the system group).
+1. **COMPONENT LIST (generate exactly these {{ max_nodes }} components):**
+   Based on the reference context, select the {{ max_nodes }} most critical components for this system.
+   Example for BMS: MCU, Cell Monitor, Voltage Monitor, Temperature Sensor, Current Sensor, 
+   CAN Transceiver, Power Supply, Watchdog, Flash Memory, RAM, Debug Port, External EEPROM, 
+   Balancing FETs, Communication IC.
 
-3. DATA NODES (type:"data") are small circular data items (SoC, SoH).
-   - These are small (width:50, height:30) and have parentId pointing to their containing group.
+2. **GROUP CONTAINERS (maximum {{ max_groups }} groups):**
+   Use groups to organize components logically. Examples:
+   - "MCU and Core Components" group
+   - "Power Management" group
+   - "Communication Interfaces" group
+   - "External Interfaces" group
+   DO NOT create more than {{ max_groups }} group nodes.
 
-4. PARENTID HIERARCHY: Every node must have a parentId.
-   - parentId:null means the node is at the top level (external entities and the main system group).
-   - Components inside the system group have parentId = the system group's id.
-   - Components inside a sub-group (e.g. MCU) have parentId = the sub-group's id.
+3. **NODE IDs** — Use short, stable, lowercase, hyphenated strings:
+   CORRECT: `"bms-cellmonitor"`, `"bms-mcu-group"`, `"ext-vehicle"`
+   WRONG:   UUIDs, bare numbers like "1", or labels with spaces.
 
-5. EDGES: Each edge must have a "data.label" that is a SHORT protocol/interface name:
-   - CORRECT: "SPI", "CAN1", "CAN2", "IO_PINS", "Vehicle CAN", "Internet", "ICD_Data"
-   - WRONG: "Measurements", "CAN Communication", "Controls Power Flow", "Sends data to"
+4. **EDGES (exactly {{ max_edges }} connections):**
+   Create realistic connections between the {{ max_nodes }} components you defined.
+   Each edge must have:
+   - source: valid node ID from your components
+   - target: valid node ID from your components
+   - label: short protocol (CAN, SPI, I2C, UART, IO_PINS, etc.)
+   
+   Example edge list for BMS ({{ max_edges }} edges):
+   1. MCU → Cell Monitor (SPI)
+   2. MCU → CAN Transceiver (SPI)
+   3. MCU → Flash Memory (SPI)
+   4. MCU → Watchdog (IO_PINS)
+   5. MCU → Debug Port (UART)
+   6. Cell Monitor → Voltage Monitor (IO_PINS)
+   7. Cell Monitor → Temperature Sensor (IO_PINS)
+   8. MCU → Current Sensor (ADC)
+   9. MCU → Power Supply (IO_PINS)
+   10. CAN Transceiver → External Vehicle (CAN)
+   11. MCU → Balancing FETs (IO_PINS)
 
-6. COLOR CODING: Assign distinct backgroundColor values by component role:
-   - Monitoring/sensing: yellow shades (#e6df19, #accd32)
-   - I/O interfaces: beige/tan (#e2dfc1)
-   - Flash/storage: purple (#ccc8ea)
-   - Security (Keys, Certificates): green (#51dc1e, #62c945)
-   - Debug: red/orange (#e26a6a)
-   - Data items (SoC, SoH): light yellow (#e3e896)
-   - External/generic: gray (#dadada)
+5. **VERIFICATION CHECKLIST (complete before output):**
+   □ I have exactly {{ max_nodes }} component nodes (type "default" or "data")
+   □ I have exactly {{ max_edges }} edges
+   □ I have {{ max_groups }} or fewer group containers
+   □ Every edge source and target matches a component node ID
+   □ Groups do NOT count toward the {{ max_nodes }} limit
+   □ No duplicate node IDs
 
--------------------------------------------------
-
-TASK
-
-1. Identify the architecture of the requested system (use the AUTHORITATIVE ASSET LIST if provided).
-2. Generate assets that belong strictly to the TARGET SYSTEM — no others.
-3. Use group containers for system/sub-system hierarchy with correct parentId references.
-4. Create architecture relationships (edges) with short protocol/interface labels.
-5. Generate realistic cybersecurity damage scenarios referencing only the generated assets.
-6. For each damage scenario derive an Impact Rating using SFOP categories.
-
--------------------------------------------------
-
-IMPACT RATING SCALE
-
-For every damage scenario derive cyber losses using SFOP categories:
-Safety | Financial | Operational | Privacy
-
-For each cyber loss assign: Negligible | Minor | Moderate | Major | Severe
-Then derive an overall impact rating based on the highest impact.
-
--------------------------------------------------
-
-STRICT OUTPUT FORMAT
-
-Return ONLY valid JSON. Do not include explanations, markdown fences, or prose.
-Start the response with '{'.
-
-Return JSON exactly in this structure (showing all three node types):
+### OUTPUT FORMAT:
+Return ONLY a valid JSON object. No markdown fences. No commentary.
 
 {
- "assets":{
-   "_id":"",
-   "user_id":"",
-   "model_id":"",
-   "template":{
-      "nodes":[
-         {
-           "id":"<system-group-uuid>",
-           "type":"group",
-           "parentId":null,
-           "data":{
-             "label":"System Name",
-             "nodeCount":7,
-             "style":{"background":"rgba(33,150,243,0.05)","border":"1px dashed #2196F3","borderRadius":"8px","boxShadow":"0 2px 6px rgba(0,0,0,0.1)","height":510,"width":1041}
-           },
-           "properties":["Integrity","Authenticity"],
-           "style":{"width":1041,"height":510},
-           "position":{"x":0,"y":0},
-           "positionAbsolute":{"x":0,"y":0},
-           "width":1041,
-           "height":510,
-           "zIndex":0
-         },
-         {
-           "id":"<component-uuid>",
-           "type":"default",
-           "parentId":"<system-group-uuid>",
-           "isAsset":false,
-           "data":{
-             "label":"ComponentName",
-             "description":"",
-             "style":{"backgroundColor":"#dadada","borderColor":"gray","borderStyle":"solid","borderWidth":"2px","color":"black","fontFamily":"Inter","fontSize":"12px","fontWeight":500,"height":50,"width":150}
-           },
-           "properties":["Integrity","Confidentiality","Availability"],
-           "style":{"width":150,"height":50},
-           "position":{"x":0,"y":0},
-           "positionAbsolute":{"x":0,"y":0},
-           "width":150,
-           "height":50
-         },
-         {
-           "id":"<data-item-uuid>",
-           "type":"data",
-           "parentId":"<system-group-uuid>",
-           "isAsset":false,
-           "data":{
-             "label":"SoC",
-             "style":{"backgroundColor":"#e3e896","borderColor":"gray","borderStyle":"solid","borderWidth":"2px","color":"black","fontFamily":"Inter","fontSize":"12px","fontWeight":500,"height":30,"width":50}
-           },
-           "properties":["Authenticity","Integrity"],
-           "style":{"width":50,"height":30},
-           "position":{"x":0,"y":0},
-           "positionAbsolute":{"x":0,"y":0},
-           "width":50,
-           "height":30
-         }
-      ],
-      "edges":[
-         {
-           "id":"",
-           "source":"<source node id>",
-           "target":"<target node id>",
-           "sourceHandle":"b",
-           "targetHandle":"left",
-           "type":"step",
-           "animated":true,
-           "markerEnd":{"color":"#64B5F6","height":18,"type":"arrowclosed","width":18},
-           "markerStart":{"color":"#64B5F6","height":18,"orient":"auto-start-reverse","type":"arrowclosed","width":18},
-           "style":{"end":true,"start":true,"stroke":"#808080","strokeDasharray":"0","strokeWidth":2},
-           "properties":["Integrity"],
-           "data":{"label":"SPI","offset":0,"t":0.5}
-         }
-      ]
-   }
- },
- "damage_scenarios":{
-   "_id":"",
-   "model_id":"",
-   "type":"damage",
-   "Derivations":[
+  "template": {
+    "nodes": [
       {
-        "id":"","nodeId":"","task":"Threat Analysis",
-        "name":"","loss":"","asset":"",
-        "damage_scene":"","isChecked":false
-      }
-   ],
-   "Details":[
-      {
-        "Name":"",
-        "Description":"",
-        "cyberLosses":[{"id":"","name":"","node":"","nodeId":"","isSelected":true,"is_risk_added":false}],
-        "impacts":{"Financial Impact":"","Safety Impact":"","Operational Impact":"","Privacy Impact":""},
-        "key":1,
-        "_id":""
-      }
-   ]
- }
+        "id": "sys-main-group",
+        "type": "group",
+        "parentId": null,
+        "data": {
+          "label": "System Name",
+          "style": {
+            "backgroundColor": "rgba(33,150,243,0.05)",
+            "borderColor": "#2196F3",
+            "borderStyle": "dashed",
+            "borderWidth": "2px"
+          }
+        },
+        "position": {"x": 0, "y": 0},
+        "height": 600,
+        "width": 1000,
+        "zIndex": 0
+      },
+      // Add up to {{ max_groups - 1 }} more group containers here (total ≤ {{ max_groups }} groups)
+      // Add your {{ max_nodes }} component nodes here...
+    ],
+    "edges": [
+      // Add exactly {{ max_edges }} edges here...
+    ]
+  },
+  "Details": [
+    // Add exactly {{ max_nodes }} detail entries matching your component nodes
+  ]
 }
+"""
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. THREAT ANALYST AGENT
+# ─────────────────────────────────────────────────────────────────────────────
 
--------------------------------------------------
+THREAT_PROMPT = """
+You are a Cybersecurity Threat Analyst performing ISO 21434 "Pin-Point Pinning" analysis.
 
-CONSTRAINTS
+TARGET SYSTEM: {{ question }}
 
-- Generate ONLY the assets listed in the AUTHORITATIVE ASSET LIST (if provided), or assets strictly belonging to the TARGET SYSTEM.
-- Do NOT add components from other ECU systems.
-- Use group containers (type:"group") for system and sub-system boundaries. Use type:"data" for small data nodes.
-- Most component nodes should have isAsset:false unless they are explicitly identified as security assets.
-- Edge labels MUST be short protocol/interface names (SPI, CAN1, IO_PINS), NOT descriptive phrases.
-- Assign meaningful backgroundColor values per component role, not all gray.
-- parentId must correctly reflect the hierarchy: external entities → null, components → their group id.
-- Damage scenarios must reference valid nodeId values from the nodes above.
-- Impact rating must be derived from the damage scenario context.
-- Use threat reasoning from CWE, MITRE, CAPEC, ATM — not from REPORTS_DB examples.
+### SYSTEM ARCHITECTURE:
+{{ architecture }}
 
-Return JSON only. Start the response with '{'.
+### RETRIEVED CYBERSECURITY CONTEXT:
+{% for doc in documents %}
+[{{ doc.meta.source }}]
+{{ doc.content }}
+---
+{% endfor %}
+
+### YOUR TASK:
+Generate exactly {{ max_threats }} high-priority technical threats, each targeting a specific component node from the architecture above.
+
+### THREAT DISCOVERY RULES:
+
+1. **PIN TO NODE**: Each threat's `nodeId` MUST be the EXACT `id` value of a node from the architecture JSON above.
+   Example: If a node has `"id": "bms-cellmonitor"`, use `"nodeId": "bms-cellmonitor"`.
+   Do NOT use the label, a UUID, or any invented string.
+
+2. **SPREAD**: Target DIFFERENT nodes. Do not cluster all threats on one component.
+
+3. **DIVERSITY**: Include at least:
+   - One PHYSICAL attack (Debug port, JTAG, hardware tampering)
+   - One NETWORK attack (CAN bus injection, Ethernet replay, OTA exploit)
+   - One SOFTWARE/DATA attack (Firmware corruption, calibration tampering, key extraction)
+
+4. **LOSS TYPE**: Specify which cybersecurity property is lost using one of:
+   `Integrity` | `Confidentiality` | `Authenticity` | `Authorization` | `Availability` | `Non-repudiation`
+
+5. **REASONING**: Ground threats in real attack patterns from CWE, CAPEC, or MITRE ATT&CK when available from the context.
+
+### OUTPUT FORMAT:
+Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `{`.
+
+{
+  "Derivations": [
+    {
+      "id": "T-01",
+      "nodeId": "<exact-node-id-from-architecture>",
+      "task": "Check for DS due to the loss of Integrity for ComponentName",
+      "name": "Descriptive Threat Name",
+      "loss": "Integrity",
+      "asset": "Component Name",
+      "damage_scene": "Detailed technical description of the attack and its consequences.",
+      "isChecked": false
+    },
+    {
+      "id": "T-02",
+      "nodeId": "<different-node-id>",
+      "task": "Check for DS due to the loss of Availability for OtherComponent",
+      "name": "Another Threat Name",
+      "loss": "Availability",
+      "asset": "Other Component Name",
+      "damage_scene": "Detailed technical scenario for this threat.",
+      "isChecked": false
+    }
+  ]
+}
 """
 
 
-def get_prompt_template() -> str:
-    """Return the TARA prompt template."""
-    return TARA_PROMPT_TEMPLATE
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. DAMAGE ANALYST AGENT - USER-DEFINED ONLY
+# ─────────────────────────────────────────────────────────────────────────────
+
+DAMAGE_PROMPT = """
+You are a Damage Assessment Specialist performing ISO 21434 impact analysis for automotive systems.
+
+### SYSTEM ARCHITECTURE:
+{{ architecture }}
+
+### YOUR TASK:
+Generate detailed, realistic cybersecurity damage scenarios for the system described above.
+You MUST generate 10-15 comprehensive damage scenarios.
+
+### DAMAGE SCENARIO REQUIREMENTS:
+
+Each damage scenario must include:
+1. **Name**: A short, descriptive title (max 8 words)
+2. **Description**: Detailed technical explanation of the attack, its method, and consequences (2-4 sentences)
+3. **cyberLosses**: Array of cybersecurity properties affected (2-4 properties per scenario)
+4. **impacts**: Impact ratings for Financial, Safety, Operational, and Privacy domains
+
+### CYBER LOSS PROPERTIES (use these exact names):
+- Integrity
+- Confidentiality  
+- Authenticity
+- Authorization
+- Availability
+- Non-repudiation
+
+### IMPACT RATINGS (use only these values):
+`Negligible` | `Minor` | `Moderate` | `Major` | `Severe`
+
+### IMPACT GUIDELINES (ISO 21434 Annex F):
+- **Safety**: Negligible=no injury | Minor=light injury | Moderate=severe injury | Major=life-threatening | Severe=fatal
+- **Financial**: Negligible=<$100 | Minor=<$1K | Moderate=<$10K | Major=<$100K | Severe=>$100K
+- **Operational**: Negligible=no disruption | Minor=minor delay | Moderate=reduced capability | Major=system unusable | Severe=fleet-wide
+- **Privacy**: Negligible=no PII | Minor=anonymized | Moderate=limited PII | Major=sensitive PII | Severe=mass breach
+
+### SCENARIO DIVERSITY REQUIREMENTS:
+- Cover different components (MCU, memory, communication, sensors, power, etc.)
+- Include various attack types (physical, network, software, side-channel, supply chain)
+- Mix impact levels (some Severe, some Moderate, some Major)
+- Reference specific node IDs from the architecture above
+
+### OUTPUT FORMAT:
+Return ONLY a valid JSON object with this exact structure.
+No markdown fences. No extra text. Start with `{` and end with `}`.
+
+{
+  "type": "User-defined",
+  "Details": [
+    {
+      "Name": "Thermal Runaway via Calibration Tampering",
+      "Description": "Attacker modifies voltage/current thresholds in Data Flash, allowing the battery to operate outside the Safe Operating Area (SOA). This leads to uncontrolled overheating and potential fire.",
+      "cyberLosses": [
+        {
+          "name": "Integrity",
+          "node": "Data Flash",
+          "nodeId": "data-flash-uuid-or-id"
+        },
+        {
+          "name": "Authenticity", 
+          "node": "Data Flash",
+          "nodeId": "data-flash-uuid-or-id"
+        }
+      ],
+      "impacts": {
+        "Financial Impact": "Severe",
+        "Safety Impact": "Severe",
+        "Operational Impact": "Severe",
+        "Privacy Impact": "Negligible"
+      }
+    },
+    {
+      "Name": "CAN Bus Denial of Service",
+      "Description": "Attacker floods the CAN bus with high-priority messages, preventing critical BMS messages from being transmitted. This causes delayed response to fault conditions.",
+      "cyberLosses": [
+        {
+          "name": "Availability",
+          "node": "CAN Transceiver",
+          "nodeId": "can-transceiver-uuid-or-id"
+        }
+      ],
+      "impacts": {
+        "Financial Impact": "Moderate",
+        "Safety Impact": "Severe",
+        "Operational Impact": "Major",
+        "Privacy Impact": "Negligible"
+      }
+    }
+  ]
+}
+
+### IMPORTANT REMINDERS:
+- Generate 10-15 scenarios, not fewer
+- Use realistic, specific scenario names (avoid generic names like "Damage Scenario 1")
+- Descriptions must be detailed and technically accurate
+- Reference actual components from the architecture using their exact nodeId
+- Each scenario should have 2-4 cyberLosses on average
+- Vary the impact ratings across scenarios
+"""

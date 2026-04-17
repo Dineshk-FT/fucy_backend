@@ -19,7 +19,7 @@ MarkupSafe==2.1.5
 packaging==24.1
 pymongo==4.8.0
 waitress==3.0.0
-reportlab==3.6.13
+reportlab>=4.0.0
 Werkzeug==3.0.3
 azure-storage-blob==12.16.0
 stripe==12.4.0
@@ -27,3 +27,31 @@ dotenv==0.9.9
 svglib==1.5.1
 six==1.16.0
 beautifulsoup4
+
+# -------------------------------
+# LangGraph (Agentic orchestration)
+# -------------------------------
+langgraph>=0.0.50
+
+# -------------------------------
+# Vector DB (Weaviate)
+# -------------------------------
+weaviate-client>=4.5.4
+weaviate-haystack>=1.0.0
+
+# -------------------------------
+# Embeddings
+# -------------------------------
+torch>=2.1.0
+
+# -------------------------------
+# XML / Parsing
+# -------------------------------
+lxml>=5.0.0
+
+# -------------------------------
+# Utilities
+# -------------------------------
+tqdm>=4.66.0
+numpy>=1.26.0
+pypdf>=4.0.0

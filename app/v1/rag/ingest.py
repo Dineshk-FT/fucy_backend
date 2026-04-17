@@ -4,35 +4,21 @@
 
 import json
 import re
-import xml.etree.ElementTree as ET
 from collections import Counter
-from typing import Iterable
+from typing import List, Optional
 
-from azure.storage.blob import BlobServiceClient
 from haystack import Document
 from lxml import etree
 
-
-# ── Azure Blob Storage configuration ─────────────────────────────────────────
-CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=fucytechdocs;AccountKey=+MpE5EQsABQbMW+HnS0vj1PqXbWc2AzBEeKwzMbPNz4S3lXPfkoxFv5m2rUj2y3GXpbxInJucWH7+AStJSYK5w==;EndpointSuffix=core.windows.net"
-blob = BlobServiceClient.from_connection_string(CONNECTION_STRING)
-rag_container = blob.get_container_client("rag")
-
-# Constants
-MAX_CHARS = 1500  # max chars per chunk for threat-framework entries
-
-# Relationships between CAPEC and CWE
-relationships = {
-    "CAPEC-66": ["CWE-89"],
-    "CAPEC-100": ["CWE-79"],
-    "CAPEC-115": ["CWE-119"],
-}
+from app.v1.rag.azure_client import get_azure_client
+from app.v1.rag.config import MAX_CHARS, AZURE_PATHS
 
 
-# ── Private helpers ───────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _truncate_framework(text: str, max_chars: int = MAX_CHARS) -> str:
-    """Trim long threat-framework descriptions; cut at last sentence boundary."""
+def _truncate(text: str, max_chars: int = MAX_CHARS) -> str:
     if len(text) <= max_chars:
         return text
     cut = text[:max_chars]
@@ -40,16 +26,7 @@ def _truncate_framework(text: str, max_chars: int = MAX_CHARS) -> str:
     return cut[:last_period + 1] if last_period > 0 else cut + "..."
 
 
-def _truncate(text, max_len: int = 800) -> str:
-    """Generic truncator used for reports/ECU content."""
-    if not text:
-        return ""
-    text = str(text)
-    return text if len(text) <= max_len else text[:max_len] + "..."
-
-
-def _flatten_list(lst):
-    """Recursively flatten nested lists to a single list of strings."""
+def _flatten_list(lst) -> list:
     result = []
     for item in lst:
         if isinstance(item, list):
@@ -59,34 +36,27 @@ def _flatten_list(lst):
     return result
 
 
-def _section_to_text(section, clause_id: str = "") -> str:
-    """Convert a clause section dict to a readable text block."""
+def _section_to_text(section: dict, clause_id: str = "") -> str:
     parts = []
     sid = section.get("section_id", "")
     title = section.get("section_title", "")
-    parts.append(f"ISO 21434 Clause {clause_id} - Section {sid}: {title}")
-
+    parts.append(f"ISO 21434 Clause {clause_id} — Section {sid}: {title}")
     for item in _flatten_list(section.get("content", [])):
         parts.append(f"  - {item}")
-
     for req in section.get("requirements", []):
         rid = req.get("id", "")
         rdesc = " ".join(_flatten_list(req.get("description", [])))
         parts.append(f"  [{rid}] {rdesc}")
-
     for rec in section.get("recommendations", []):
         rid = rec.get("id", "")
         rdesc = " ".join(_flatten_list(rec.get("description", [])))
         parts.append(f"  [{rid}] (Recommendation) {rdesc}")
-
     for sub in section.get("subsections", []):
         parts.append(_section_to_text(sub, clause_id))
-
     return "\n".join(parts)
 
 
 def _clean_node_for_text(node: dict):
-    """Extract readable label + description from node dict."""
     data = node.get("data", {})
     label = data.get("label", node.get("id", ""))
     desc = data.get("description", "")
@@ -95,164 +65,137 @@ def _clean_node_for_text(node: dict):
     return label, desc, props, ntype
 
 
-# ── Threat-framework ingestion from Azure ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Threat frameworks
+# ─────────────────────────────────────────────────────────────────────────────
 
-def ingest_mitre(mitre_blob_name: str, source: str = "MITRE_MOBILE") -> list[Document]:
-    """Load MITRE ATT&CK JSON from Azure - one Document per attack-pattern."""
-    try:
-        bc = rag_container.get_blob_client(mitre_blob_name)
-        raw = bc.download_blob().readall()
-        data = json.loads(raw)
-    except Exception as e:
-        print(f"⚠️  MITRE file {mitre_blob_name} not found: {e}")
+def ingest_mitre(source: str) -> List[Document]:
+    """Ingest MITRE ATT&CK from Azure."""
+    client = get_azure_client()
+    path = AZURE_PATHS["MITRE_MOBILE"] if source == "MITRE_MOBILE" else AZURE_PATHS["MITRE_ICS"]
+    data = client.download_json(path)
+    
+    if not data:
+        print(f"  ⚠️ Failed to load {source} from Azure")
         return []
-
+    
     docs = []
     for obj in data.get("objects", []):
         if obj.get("type") != "attack-pattern":
             continue
         name = obj.get("name", "")
-        desc = _truncate_framework(obj.get("description", ""))
+        desc = _truncate(obj.get("description", ""))
         if not desc:
             continue
         docs.append(Document(
             content=f"MITRE Technique: {name}\nDescription: {desc}",
-            meta={"source": source, "stix_id": obj.get("id"), "type": "attack_pattern"}
+            meta={"source": source, "stix_id": obj.get("id")}
         ))
-    print(f"✅ MITRE {source} Loaded: {len(docs)} techniques")
     return docs
 
 
-def ingest_atm(atm_blob_name: str = "REPORTS_DB/atm.json") -> list[Document]:
-    """Load Automotive Threat Matrix JSON from Azure."""
-    try:
-        bc = rag_container.get_blob_client(atm_blob_name)
-        raw = bc.download_blob().readall()
-        data = json.loads(raw)
-    except Exception as e:
-        print(f"⚠️  ATM file not found: {e}")
+def ingest_atm() -> List[Document]:
+    """Ingest ATM framework from Azure."""
+    client = get_azure_client()
+    data = client.download_json(AZURE_PATHS["ATM_PATH"])
+    
+    if not data:
+        print("  ⚠️ Failed to load ATM from Azure")
         return []
-
+    
     docs = []
     for obj in data.get("objects", []):
         if obj.get("type") != "attack-pattern":
             continue
         name = obj.get("name", "")
-        raw_desc = obj.get("description", "")
-        desc = _truncate_framework(re.sub(r"<[^>]+>", " ", raw_desc).strip())
+        desc = _truncate(re.sub(r"<[^>]+>", " ", obj.get("description", "")).strip())
         if not desc:
             continue
         docs.append(Document(
             content=f"ATM Technique: {name}\nDescription: {desc}",
-            meta={"source": "ATM", "stix_id": obj.get("id"), "type": "attack_pattern"}
+            meta={"source": "ATM", "stix_id": obj.get("id")}
         ))
-    print(f"✅ ATM Loaded: {len(docs)} techniques")
     return docs
 
 
-def ingest_capec(capec_blob_name: str = "REPORTS_DB/capec_v3.9.xml") -> list[Document]:
-    """Load CAPEC XML from Azure."""
-    try:
-        bc = rag_container.get_blob_client(capec_blob_name)
-        raw = bc.download_blob().readall()
-        root = ET.fromstring(raw)
-    except Exception as e:
-        print(f"⚠️  CAPEC file not found: {e}")
+def ingest_capec() -> List[Document]:
+    """Ingest CAPEC from Azure."""
+    client = get_azure_client()
+    root = client.download_xml(AZURE_PATHS["CAPEC_PATH"])
+    
+    if root is None:
+        print("  ⚠️ Failed to load CAPEC from Azure")
         return []
-
+    
     ns = {"capec": "http://capec.mitre.org/capec-3"}
     docs = []
-
-    patterns = root.findall(".//capec:Attack_Pattern", ns)
-    if not patterns:
-        patterns = root.findall(".//{*}Attack_Pattern")
-
-    for ap in patterns:
-        capec_id = ap.get("ID")
+    for ap in root.findall(".//capec:Attack_Pattern", ns):
+        cid = ap.get("ID")
         name = ap.findtext("capec:Name", default="", namespaces=ns)
-        desc = _truncate_framework(ap.findtext("capec:Description", default="", namespaces=ns))
+        desc = _truncate(ap.findtext("capec:Description", default="", namespaces=ns))
         if not desc:
             continue
-
-        related_cwe = relationships.get(f"CAPEC-{capec_id}", [])
         docs.append(Document(
-            content=f"CAPEC-{capec_id}: {name}\nDescription: {desc}",
-            meta={
-                "source": "CAPEC",
-                "capec_id": f"CAPEC-{capec_id}",
-                "attack_pattern": name,
-                "related_cwe": related_cwe,
-                "type": "attack_pattern"
-            }
+            content=f"CAPEC-{cid}: {name}\nDescription: {desc}",
+            meta={"source": "CAPEC", "capec_id": cid}
         ))
-    print(f"✅ CAPEC Loaded: {len(docs)} patterns")
     return docs
 
 
-def ingest_cwe(cwe_blob_name: str = "REPORTS_DB/cwec_v4.19.1.xml") -> list[Document]:
-    """Load CWE XML from Azure."""
-    try:
-        bc = rag_container.get_blob_client(cwe_blob_name)
-        raw = bc.download_blob().readall()
-        parser = etree.XMLParser(recover=True, huge_tree=True)
-        root = etree.fromstring(raw, parser)
-    except Exception as e:
-        print(f"⚠️  CWE file not found: {e}")
+def ingest_cwe() -> List[Document]:
+    """Ingest CWE from Azure."""
+    client = get_azure_client()
+    data = client.download_blob(AZURE_PATHS["CWE_PATH"])
+    
+    if data is None:
+        print("  ⚠️ Failed to load CWE from Azure")
         return []
-
+    
+    parser = etree.XMLParser(recover=True, huge_tree=True)
+    tree = etree.parse( BytesIO(data), parser)
+    root = tree.getroot()
     ns = {"cwe": "http://cwe.mitre.org/cwe-7"}
     docs = []
-
     for w in root.findall(".//cwe:Weakness", namespaces=ns):
         cwe_id = w.get("ID")
         name = w.get("Name", "")
         desc_el = w.find("cwe:Description", namespaces=ns)
-        desc = _truncate_framework((desc_el.text or "").strip()) if desc_el is not None else ""
+        desc = _truncate((desc_el.text or "").strip()) if desc_el is not None else ""
         if not desc:
             continue
         docs.append(Document(
             content=f"CWE-{cwe_id}: {name}\nDescription: {desc}",
-            meta={"source": "CWE", "cwe_id": f"CWE-{cwe_id}", "weakness": name, "type": "weakness"}
+            meta={"source": "CWE", "cwe_id": f"CWE-{cwe_id}"}
         ))
-    print(f"✅ CWE Loaded: {len(docs)} weaknesses")
     return docs
 
 
-# ── ISO 21434 & Annex ingestion from Azure ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# ISO 21434 & Annex F
+# ─────────────────────────────────────────────────────────────────────────────
 
-def ingest_iso_clauses() -> list[Document]:
-    """Load ISO 21434 clause JSON files from Azure with section-level chunking."""
-    records = []
+def ingest_iso_clauses() -> List[Document]:
+    """Ingest ISO 21434 clauses from Azure."""
+    client = get_azure_client()
+    clause_blobs = client.list_blobs(AZURE_PATHS["CLAUSE_PATH"])
     
-    # Look for clause files in REPORTS_DB folder
-    for b in rag_container.list_blobs(name_starts_with="REPORTS_DB/clause"):
-        name = b.name
-        try:
-            bc = rag_container.get_blob_client(name)
-            raw = bc.download_blob().readall()
-            clause = json.loads(raw)
-        except Exception as e:
-            print(f"⚠️  Failed to load clause file {name}: {e}")
+    docs = []
+    for blob_path in clause_blobs:
+        if not blob_path.endswith(".json"):
             continue
-
-        # Extract clause ID from filename or from the JSON
-        clause_id = clause.get("clause_id", "")
-        if not clause_id:
-            match = re.search(r'clause[_-]?(\d+)', name, re.IGNORECASE)
-            if match:
-                clause_id = match.group(1)
-            else:
-                clause_id = "unknown"
         
-        clause_title = clause.get("clause_title", f"Clause {clause_id}")
-
-        # Section-level chunking
-        for section in clause.get("sections", []):
+        data = client.download_json(blob_path)
+        if not data:
+            continue
+        
+        clause_id = data.get("clause_id", "")
+        clause_title = data.get("clause_title", f"Clause {clause_id}")
+        
+        for section in data.get("sections", []):
             text = _section_to_text(section, clause_id)
             if len(text.strip()) < 20:
                 continue
-
-            records.append(Document(
+            docs.append(Document(
                 content=text,
                 meta={
                     "source": "ISO_21434",
@@ -260,37 +203,35 @@ def ingest_iso_clauses() -> list[Document]:
                     "clause_title": clause_title,
                     "section_id": section.get("section_id", ""),
                     "title": section.get("section_title", ""),
-                    "type": "clause_section"
                 }
             ))
+    
+    print(f"  ISO 21434: {len(docs)} sections")
+    return docs
 
-    print(f"✅ ISO Clauses Loaded: {len(records)} sections")
-    return records
 
-
-def ingest_annex(annex_blob_name: str = "REPORTS_DB/annex.json") -> list[Document]:
-    """Load Annex F JSON from Azure with section-level chunking."""
-    try:
-        bc = rag_container.get_blob_client(annex_blob_name)
-        raw = bc.download_blob().readall()
-        annex_json = json.loads(raw)
-    except Exception as e:
-        print(f"⚠️  Annex file not found: {e}")
+def ingest_annex() -> List[Document]:
+    """Ingest Annex F from Azure."""
+    client = get_azure_client()
+    annex = client.download_json(AZURE_PATHS["ANNEX_PATH"])
+    
+    if not annex:
+        print("  ⚠️ Annex file not found in Azure — skipping.")
         return []
-
-    annex_docs = []
-    annex_id = annex_json.get("annex_id", "F")
-    annex_title = annex_json.get("annex_title", "Guidelines for Impact Rating")
-
-    for section in annex_json.get("sections", []):
+    
+    annex_id = annex.get("annex_id", "F")
+    annex_title = annex.get("annex_title", "Guidelines for Impact Rating")
+    docs = []
+    
+    for section in annex.get("sections", []):
         parts = []
         sid = section.get("section_id", "")
         stitle = section.get("section_title", "")
-        parts.append(f"Annex {annex_id}: {annex_title} - Section {sid}: {stitle}")
-
+        parts.append(f"Annex {annex_id}: {annex_title} — Section {sid}: {stitle}")
+        
         for c in section.get("content", []):
             parts.append(f"  - {c}")
-
+        
         for t in section.get("tables", []):
             cols = t.get("columns", [])
             rows = t.get("rows", [])
@@ -300,103 +241,82 @@ def ingest_annex(annex_blob_name: str = "REPORTS_DB/annex.json") -> list[Documen
                 parts.append("-" * 40)
                 for r in rows:
                     parts.append(" | ".join(str(r.get(col, "")) for col in cols))
-
+        
         for note in section.get("notes", []):
             parts.append(f"Note: {note}")
-
+        
         text = "\n".join(parts)
         if len(text.strip()) < 20:
             continue
-
-        annex_docs.append(Document(
+        docs.append(Document(
             content=text,
-            meta={
-                "source": "ANNEX_F",
-                "annex": annex_id,
-                "section_id": sid,
-                "title": stitle,
-                "type": "annex_section"
-            }
+            meta={"source": "ANNEX_F", "annex": annex_id, "section_id": sid, "title": stitle}
         ))
+    
+    print(f"  Annex F: {len(docs)} sections")
+    return docs
 
-    print(f"✅ Annex Loaded: {len(annex_docs)} sections")
-    return annex_docs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ECU data & Reports DB
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _truncate_short(text, max_len: int = 800) -> str:
+    if not text:
+        return ""
+    text = str(text)
+    return text if len(text) <= max_len else text[:max_len] + "..."
 
 
-# ── ECU data ingestion from Azure ──────────────────────────────────────────────
-
-def ingest_ecu(ecu_blob_name: str = "REPORTS_DB/data.json") -> list[Document]:
-    """Load ECU/system data JSON from Azure - one Document per ECU entry."""
-    try:
-        bc = rag_container.get_blob_client(ecu_blob_name)
-        raw = bc.download_blob().readall()
-        ecu_data = json.loads(raw)
-    except Exception as e:
-        print(f"⚠️  ECU data file not found: {e}")
+def ingest_ecu() -> List[Document]:
+    """Ingest ECU data from Azure."""
+    client = get_azure_client()
+    data = client.download_json(AZURE_PATHS["ECU_PATH"])
+    
+    if not data:
+        print("  ⚠️ ECU file not found in Azure — skipping.")
         return []
-
-    ecu_docs = []
-    for k, v in ecu_data.items():
-        ecu_docs.append(Document(
-            content=json.dumps(v, indent=2),
-            meta={"source": "ECU", "title": k, "type": "ecu_data"}
+    
+    docs = []
+    items = data.items() if isinstance(data, dict) else enumerate(data)
+    for key, val in items:
+        docs.append(Document(
+            content=json.dumps(val, indent=2),
+            meta={"source": "ECU", "title": str(key)}
         ))
-    print(f"✅ ECU Loaded: {len(ecu_docs)} entries")
-    return ecu_docs
+    
+    print(f"  ECU entries: {len(docs)}")
+    return docs
 
 
-# ── Reports DB ingestion from Azure ────────────────────────────────────────────
-
-def ingest_reports_db() -> list[Document]:
-    """Ingest TARA reference reports from Azure with fine-grained chunking."""
+def ingest_reports_db() -> List[Document]:
+    """Ingest reports database from Azure."""
+    client = get_azure_client()
+    report_blobs = client.list_blobs(AZURE_PATHS["REPORTS_PATH"])
+    
     docs = []
     
-    # List all JSON files in the REPORTS_DB folder
-    for b in rag_container.list_blobs(name_starts_with="REPORTS_DB/"):
-        if not b.name.endswith('.json'):
+    for blob_path in report_blobs:
+        if not blob_path.endswith(".json") or blob_path == AZURE_PATHS["ECU_PATH"]:
             continue
         
-        # Skip configuration files
-        skip_files = [
-            "REPORTS_DB/data.json", 
-            "REPORTS_DB/annex.json", 
-            "REPORTS_DB/mobile-attack (1).json", 
-            "REPORTS_DB/ics-attack (1).json",
-            "REPORTS_DB/atm.json"
-        ]
-        if b.name in skip_files:
-            continue
+        fname = blob_path.split("/")[-1]
+        report = client.download_json(blob_path)
         
-        # Skip clause files
-        if "clause" in b.name.lower():
-            continue
-            
-        fname = b.name.split('/')[-1]
-        
-        try:
-            bc = rag_container.get_blob_client(b.name)
-            raw = bc.download_blob().readall()
-            report = json.loads(raw)
-        except Exception as e:
-            print(f"  ⚠️ Failed to load {fname}: {e}")
+        if not report:
             continue
 
-        # Format A: {"assets": {...}, "damage_scenarios": {...}}
         if "assets" in report and "damage_scenarios" in report:
             assets_block = report["assets"]
             damage_block = report["damage_scenarios"]
             model_name = assets_block.get("model_id", fname.replace(".json", ""))
             nodes_list = assets_block.get("template", {}).get("nodes", [])
-            edges_list = assets_block.get("template", {}).get("edges", [])
             derivation_list = damage_block.get("Derivations") or damage_block.get("derivation") or []
             details_list = damage_block.get("Details") or damage_block.get("details") or []
-
-        # Format B: {"Assets": [...], "Models": [...], ...}
         elif "Assets" in report:
             a_block = report["Assets"][0] if report.get("Assets") else {}
             model_name = report["Models"][0]["name"] if report.get("Models") else fname
             nodes_list = a_block.get("template", {}).get("nodes", [])
-            edges_list = a_block.get("template", {}).get("edges", [])
             ds_list = report.get("Damage_scenarios") or report.get("DamageScenarios") or []
             d_block = ds_list[0] if ds_list else {}
             derivation_list = d_block.get("Derivations") or d_block.get("derivation") or []
@@ -405,59 +325,42 @@ def ingest_reports_db() -> list[Document]:
             print(f"  Unrecognised format in {fname} — skipping.")
             continue
 
-        # Chunk 1: Component nodes
         node_count = 0
         for node in nodes_list:
             label, desc, props, ntype = _clean_node_for_text(node)
             if not label or label.strip() == "":
                 continue
             is_asset = node.get("isAsset", False)
-            content = (
-                f"Reference Component [{model_name}]: {label}\n"
-                f"Type: {ntype}  IsAsset: {is_asset}\n"
-                f"Description: {desc}\n"
-                f"Security Properties: {', '.join(props) if props else 'N/A'}"
-            )
             docs.append(Document(
-                content=content,
-                meta={
-                    "source": "REPORTS_DB",
-                    "file": fname,
-                    "model": model_name,
-                    "type": "asset",
-                    "is_asset": is_asset,
-                    "node_id": node.get("id", ""),
-                    "component_type": "reference"
-                }
+                content=(
+                    f"Reference Component [{model_name}]: {label}\n"
+                    f"Type: {ntype}  IsAsset: {is_asset}\n"
+                    f"Description: {desc}\n"
+                    f"Security Properties: {', '.join(props) if props else 'N/A'}"
+                ),
+                meta={"source": "REPORTS_DB", "file": fname, "model": model_name,
+                      "type": "asset", "is_asset": is_asset, "node_id": node.get("id", "")}
             ))
             node_count += 1
 
-        # Chunk 2: Damage derivations
         deriv_count = 0
         for d in derivation_list:
             name = d.get("name", "")
             if not name:
                 continue
-            content = (
-                f"Reference Damage Derivation [{model_name}]:\n"
-                f"Threat/Weakness: {name}\n"
-                f"Affected Asset: {d.get('asset', '')}\n"
-                f"Cyber Loss: {d.get('loss', '')}\n"
-                f"Damage Scene: {d.get('damage_scene', '')}"
-            )
             docs.append(Document(
-                content=content,
-                meta={
-                    "source": "REPORTS_DB",
-                    "file": fname,
-                    "model": model_name,
-                    "type": "damage_derivation",
-                    "component_type": "reference"
-                }
+                content=(
+                    f"Reference Damage Derivation [{model_name}]:\n"
+                    f"Threat/Weakness: {name}\n"
+                    f"Affected Asset: {d.get('asset', '')}\n"
+                    f"Cyber Loss: {d.get('loss', '')}\n"
+                    f"Damage Scene: {d.get('damage_scene', '')}"
+                ),
+                meta={"source": "REPORTS_DB", "file": fname,
+                      "model": model_name, "type": "damage_derivation"}
             ))
             deriv_count += 1
 
-        # Chunk 3: Damage details
         detail_count = 0
         for det in details_list:
             dname = det.get("Name", "")
@@ -467,25 +370,19 @@ def ingest_reports_db() -> list[Document]:
             losses = [(cl.get("name", ""), cl.get("node", "")) for cl in det.get("cyberLosses", [])]
             impact_str = "  ".join(f"{k}: {v}" for k, v in impacts.items() if v)
             loss_str = ", ".join(f"{n} ({nd})" for n, nd in losses if n)
-            content = (
-                f"Reference Damage Scenario [{model_name}]: {dname}\n"
-                f"Description: {_truncate(det.get('Description', ''), 800)}\n"
-                f"Cyber Losses: {loss_str}\n"
-                f"Impact Ratings: {impact_str}"
-            )
             docs.append(Document(
-                content=content,
-                meta={
-                    "source": "REPORTS_DB",
-                    "file": fname,
-                    "model": model_name,
-                    "type": "damage_detail",
-                    "component_type": "reference"
-                }
+                content=(
+                    f"Reference Damage Scenario [{model_name}]: {dname}\n"
+                    f"Description: {_truncate_short(det.get('Description', ''), 800)}\n"
+                    f"Cyber Losses: {loss_str}\n"
+                    f"Impact Ratings: {impact_str}"
+                ),
+                meta={"source": "REPORTS_DB", "file": fname,
+                      "model": model_name, "type": "damage_detail"}
             ))
             detail_count += 1
 
-        # Chunk 4: Hierarchy summary
+        # Hierarchy summary
         id_to_label = {}
         children_map = {}
         for node in nodes_list:
@@ -511,65 +408,150 @@ def ingest_reports_db() -> list[Document]:
         if len(hierarchy_lines) > 1:
             docs.append(Document(
                 content="\n".join(hierarchy_lines),
-                meta={"source": "REPORTS_DB", "file": fname, "model": model_name, "type": "hierarchy_summary"}
+                meta={"source": "REPORTS_DB", "file": fname,
+                      "model": model_name, "type": "hierarchy_summary"}
             ))
 
-        # Chunk 5: Edge summary
-        if edges_list:
-            edge_lines = [f"Edge connections for [{model_name}]:"]
-            for edge in edges_list:
-                elabel = edge.get("data", {}).get("label", "")
-                src_id = edge.get("source", "")
-                tgt_id = edge.get("target", "")
-                src_label = id_to_label.get(src_id, src_id)
-                tgt_label = id_to_label.get(tgt_id, tgt_id)
-                eprops = edge.get("properties", [])
-                edge_lines.append(
-                    f"  {elabel}: {src_label} <-> {tgt_label} "
-                    f"(properties: {', '.join(eprops) if eprops else 'none'})"
-                )
-            docs.append(Document(
-                content="\n".join(edge_lines),
-                meta={"source": "REPORTS_DB", "file": fname, "model": model_name, "type": "edge_summary"}
-            ))
+        print(f"  {fname}: {node_count} components | {deriv_count} derivations | {detail_count} details")
 
-        if node_count > 0 or deriv_count > 0 or detail_count > 0:
-            print(f"  {fname}: {node_count} components | {deriv_count} derivations | {detail_count} details")
-
-    print(f"✅ REPORTS_DB total chunks: {len(docs)}")
+    print(f"\nREPORTS_DB (JSON) total chunks: {len(docs)}")
     return docs
 
 
-# ── Master loader for all documents from Azure ─────────────────────────────────
+def ingest_markdown_reports() -> List[Document]:
+    """Ingest professional Markdown knowledge documents from Azure."""
+    client = get_azure_client()
+    md_blobs = client.list_blobs(AZURE_PATHS["REPORTS_PATH"])
+    
+    docs = []
+    
+    for blob_path in md_blobs:
+        if not blob_path.endswith(".md"):
+            continue
+        
+        fname = blob_path.split("/")[-1]
+        content = client.download_text(blob_path)
+        
+        if not content:
+            continue
 
-def load_all_documents() -> list[Document]:
-    """Load all documents from Azure Blob Storage."""
-    print("Loading threat frameworks from Azure...")
-    mitre_docs = ingest_mitre("REPORTS_DB/mobile-attack (1).json", "MITRE_MOBILE")
-    mitre_docs += ingest_mitre("REPORTS_DB/ics-attack (1).json", "MITRE_ICS")
-    atm_docs = ingest_atm("REPORTS_DB/atm.json")
-    capec_docs = ingest_capec("REPORTS_DB/capec_v3.9.xml")
-    cwe_docs = ingest_cwe("REPORTS_DB/cwec_v4.19.1.xml")
-    print(Counter(d.meta["source"] for d in mitre_docs + atm_docs + capec_docs + cwe_docs))
+        sections = re.split(r"\n(?=## )", content)
+        for i, sec in enumerate(sections):
+            if not sec.strip():
+                continue
+            
+            docs.append(Document(
+                content=sec.strip(),
+                meta={
+                    "source": "KNOWLEDGE_BASE",
+                    "file": fname,
+                    "section": i,
+                    "type": "markdown_report"
+                }
+            ))
+        print(f"  {fname}: Processed {len(sections)} knowledge sections.")
 
-    print("\nLoading ISO 21434 clauses from Azure...")
+    print(f"KNOWLEDGE_BASE (Markdown) total chunks: {len(docs)}")
+    return docs
+
+
+def ingest_pdfs() -> List[Document]:
+    """Ingest PDF files from Azure by extracting text and chunking."""
+    client = get_azure_client()
+    pdf_blobs = client.list_blobs(AZURE_PATHS["PDF_PATH"])
+    
+    docs = []
+    
+    try:
+        from pypdf import PdfReader
+        from io import BytesIO
+    except ImportError:
+        print("⚠️  pypdf not installed. Skipping PDF ingestion.")
+        return []
+
+    for blob_path in pdf_blobs:
+        if not blob_path.endswith(".pdf"):
+            continue
+        
+        fname = blob_path.split("/")[-1]
+        print(f"  Ingesting PDF: {fname}...")
+        
+        try:
+            data = client.download_blob(blob_path)
+            if not data:
+                continue
+            
+            reader = PdfReader(BytesIO(data))
+            full_text = ""
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text:
+                    full_text += f"\n--- Page {i+1} ---\n" + text
+            
+            chunk_size = 2000
+            overlap = 200
+            
+            p_docs = []
+            for i in range(0, len(full_text), chunk_size - overlap):
+                chunk = full_text[i:i + chunk_size]
+                if not chunk.strip():
+                    continue
+                
+                p_docs.append(Document(
+                    content=chunk.strip(),
+                    meta={
+                        "source": "REGULATION_PDF",
+                        "file": fname,
+                        "chunk_index": len(p_docs),
+                        "type": "technical_regulation"
+                    }
+                ))
+            docs.extend(p_docs)
+            print(f"    {fname}: {len(p_docs)} chunks created.")
+        except Exception as e:
+            print(f"  ❌ Error processing {fname}: {e}")
+
+    return docs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Master loader
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_all_documents() -> List[Document]:
+    """Load and merge all dataset sources from Azure."""
+    print("Loading threat frameworks...")
+    mitre_mobile = ingest_mitre("MITRE_MOBILE")
+    mitre_ics = ingest_mitre("MITRE_ICS")
+    atm_docs = ingest_atm()
+    capec_docs = ingest_capec()
+    cwe_docs = ingest_cwe()
+    
+    print(f"  MITRE Mobile: {len(mitre_mobile)}, MITRE ICS: {len(mitre_ics)}")
+    print(f"  ATM: {len(atm_docs)}, CAPEC: {len(capec_docs)}, CWE: {len(cwe_docs)}")
+
+    print("\nLoading ISO 21434 clauses...")
     iso_docs = ingest_iso_clauses()
-    annex_docs = ingest_annex("REPORTS_DB/annex.json")
-    print(f"  ISO 21434: {len(iso_docs)} sections  |  Annex F: {len(annex_docs)} sections")
+    annex_docs = ingest_annex()
 
-    print("\nLoading ECU data from Azure...")
-    ecu_docs = ingest_ecu("REPORTS_DB/data.json")
-    print(f"  ECU entries: {len(ecu_docs)}")
+    print("\nLoading ECU data...")
+    ecu_docs = ingest_ecu()
 
-    print("\nLoading REPORTS DB from Azure...")
+    print("\nLoading REPORTS DB...")
     reports_docs = ingest_reports_db()
+    kb_docs = ingest_markdown_reports()
+
+    print("\nLoading PDF regulations...")
+    pdf_docs = ingest_pdfs()
 
     all_docs = ecu_docs + iso_docs + annex_docs
-    all_docs += mitre_docs + atm_docs + capec_docs + cwe_docs + reports_docs
+    all_docs += mitre_mobile + mitre_ics + atm_docs + capec_docs + cwe_docs
+    all_docs += reports_docs + kb_docs + pdf_docs
 
     print(f"\n{'='*50}")
     print(f"Total documents: {len(all_docs)}")
     dist = Counter(d.meta.get("source", "?") for d in all_docs)
     for src, cnt in sorted(dist.items()):
         print(f"  {src:<20}: {cnt}")
+    
     return all_docs

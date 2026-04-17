@@ -5,7 +5,7 @@ import re
 from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
-from app.Methods.helpers import adjust_group_sizes, build_full_edge, build_basic_node, calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes, structure_attack_tree_templates, AttackTableoptions, threat_type, safe_json_parse
+from app.Methods.helpers import  structure_attack_tree_templates, AttackTableoptions, threat_type, safe_json_parse
 from app.v1.gemini.main import GeminiClient
 import random
 import os
@@ -17,17 +17,26 @@ from bson import ObjectId
 import traceback
 from werkzeug.datastructures import MultiDict
 import time
-from app.v1.rag.main import (
-    retrieve_documents,
-    build_rag_context,
-    build_prompt_from_documents,
-    stamp_uuids,
-    crosslink_node_ids,
+from app.v1.rag.components import (
     resolve_ecu,
     build_enriched_query,
+    stamp_uuids,
+    crosslink_node_ids,
+    parse_and_fix,
 )
+import jinja2
 
+from dotenv import load_dotenv
 
+# Specify the exact path to your .env file
+env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')  # Adjust path as needed
+load_dotenv(env_path, override=True)  # override=True forces reload
+
+# Or try this simpler approach:
+load_dotenv(override=True)
+
+# Now get the key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -37,20 +46,68 @@ class JSONEncoder(json.JSONEncoder):
 
 
 modelprompt = Blueprint("modelprompt", __name__)
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
 
 gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 # Path to dataecu.json — adjust to match your project layout
 ECU_DB_PATH = os.getenv("ECU_DB_PATH", "datasets/dataecu.json")
 
-@modelprompt.route("/get/key", methods=["GET"])
-def get_google_api_key():
-    """Endpoint to retrieve the Google API key (for frontend use)"""
-    if GOOGLE_API_KEY:
-        return jsonify({"googleApiKey": GOOGLE_API_KEY})
-    else:
-        return jsonify({"error": "Google API key not configured"}), 500
+# @modelprompt.route("/debug/env", methods=["GET"])
+# def debug_env():
+#     """Debug endpoint to check environment variables"""
+#     api_key = os.getenv("GOOGLE_API_KEY")
+#     return jsonify({
+#         "GOOGLE_API_KEY_exists": api_key is not None,
+#         "GOOGLE_API_KEY_length": len(api_key) if api_key else 0,
+#         "GOOGLE_API_KEY_preview": api_key[:10] + "..." if api_key else "Not set",
+#         "all_env_vars": {k: v for k, v in os.environ.items() if "KEY" in k or "API" in k}
+#     })
+
+# @modelprompt.route("/test-gemini", methods=["GET"])
+# def test_gemini():
+#     """Test if Gemini API key is working"""
+#     try:
+#         response = gemini_client.generate_content("Say 'API key works!'")
+#         content = gemini_client.get_text(response)
+#         return jsonify({"success": True, "response": content})
+#     except Exception as e:
+#         return jsonify({"success": False, "error": str(e)}), 500
+
+# @modelprompt.route("/debug/key-info", methods=["GET"])
+# def debug_key_info():
+#     """Get information about the API key being used"""
+#     try:
+#         # Try to get the project ID from the API response
+#         response = gemini_client.generate_content("Tell me what project this API key belongs to")
+#         content = gemini_client.get_text(response)
+#         return jsonify({
+#             "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:15] + "...",
+#             "project_guess": content[:200] if content else "Unknown",
+#             "full_response": content
+#         })
+#     except Exception as e:
+#         error_msg = str(e)
+#         # Extract project ID from error if present
+#         import re
+#         project_match = re.search(r'projects/(\d+)', error_msg)
+#         return jsonify({
+#             "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:15] + "...",
+#             "error": error_msg[:500],
+#             "project_id_from_error": project_match.group(1) if project_match else "Not found"
+#         })
+
+
+# @modelprompt.route("/debug/status", methods=["GET"])
+# def debug_status():
+#     """Check current configuration"""
+#     return jsonify({
+#         "api_key_loaded": bool(os.getenv("GOOGLE_API_KEY")),
+#         "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:10] + "..." if os.getenv("GOOGLE_API_KEY") else "Not set",
+#         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+#         "max_nodes_in_pipeline": 20,  # Should match pipeline.py
+#         "status": "Ready" if os.getenv("GOOGLE_API_KEY") else "Missing API Key"
+#     })
 
 #1- Prompt template for label creation (inputs for the model)
 def build_prompt(system_name, user_prompt=None):
@@ -109,10 +166,12 @@ def get_system_inputs():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-#2- Item definition prompt
+
+#2- Item definition prompt (COMPACT VERSION - Architecture Only)
+
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
-    """Generate ReactFlow template - can be called as route or function."""
+    """Generate ReactFlow template - with manual positioning and group handling."""
     try:
         if not request_data:
             request_data = request
@@ -145,333 +204,319 @@ def generate_reactflow_template(standalone=False, request_data=None):
             for key, value in dynamic_fields.items()
         ])
 
-        # ── Import RAG functions ───────────────────────────────────────────
+        # ── Imports ────────────────────────────────────────────────────────
         from app.v1.rag.components import (
             resolve_ecu as rag_resolve_ecu,
             build_enriched_query as rag_build_enriched_query,
             stamp_uuids as rag_stamp_uuids,
             crosslink_node_ids as rag_crosslink_node_ids,
-            parse_and_fix as rag_parse_and_fix,
         )
         from app.v1.rag.ingest import load_all_documents
-        from app.v1.rag.pipeline import build_pipeline
-        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
-        from haystack.components.builders import PromptBuilder
+        from app.v1.rag.pipeline import build_graph
         from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
-        
-        # ── ECU resolution and enrichment ───────────────────────────────────
-        print(f"Resolving ECU for query: {system_name}")
-        
+        from app.Methods.helpers import (
+            # calculate_node_positions,
+            # recalculate_group_heights_from_children,
+            # position_ungrouped_nodes,
+            # adjust_group_sizes,
+            build_basic_node,
+            build_full_edge
+        )
+
+        from app.Methods.new_helpers import calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes, adjust_group_sizes
+
+        MAX_NODES = 14
+        MAX_EDGES = 11
+
+        # ── Build enriched query ───────────────────────────────────────────
         ecu_entry = rag_resolve_ecu(system_name)
-        if ecu_entry:
-            print(f"Matched ECU  : {ecu_entry['name']}")
-            print(f"Type         : {ecu_entry['type']}")
-            print(f"Asset hint   : {ecu_entry['hint'][:120]}...")
-        else:
-            print("No dataecu.json match — using open-ended generation.")
-
-        # Build enriched LLM query with authoritative asset list
         enriched_query = rag_build_enriched_query(system_name, ecu_entry)
-        
-        print("\n" + "="*80)
-        print("ENRICHED QUERY (for LLM):")
-        print("="*80)
-        print(enriched_query[:1000] + "..." if len(enriched_query) > 1000 else enriched_query)
-        print("="*80 + "\n")
 
-        # ── Load documents and build pipeline ───────────────────────────────
-        print(f"Loading documents from Azure and building RAG pipeline...")
-        
-        # Load all documents from Azure
-        all_docs = load_all_documents()
-        
-        # Build the pipeline (this embeds documents and creates the pipeline)
-        pipeline, _ = build_pipeline(all_docs)
-        
-        # Retrieve documents using plain system_name for embedding
-        print(f"Retrieving documents for system: {system_name}")
-        
-        # Run the pipeline to get retrieval
-        retrieval_result = pipeline.run(
-            {
-                "text_embedder": {"text": system_name},
-                "prompt_builder": {"question": enriched_query},
-            },
-            include_outputs_from=["retriever"],
-        )
-        
-        retrieved_docs = retrieval_result["retriever"]["documents"]
-        print(f"Retrieved {len(retrieved_docs)} documents")
-        
-        # Print retrieved document sources
-        from collections import Counter
-        sources = Counter(d.meta.get('source') for d in retrieved_docs)
-        print(f"Retrieved document sources: {dict(sources)}")
-        
-        # ── Build prompt using YOUR template from prompt.py ─────────────────
-        print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
-        
-        prompt_builder = PromptBuilder(
-            template=TARA_PROMPT_TEMPLATE,
-            required_variables=["documents", "question"],
-        )
-        
-        prompt_result = prompt_builder.run(
-            documents=retrieved_docs,
-            question=enriched_query
-        )
-        
-        rag_prompt = prompt_result["prompt"]
-        
-        # print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
-        # print(f"RAG prompt length: {len(rag_prompt)} characters")
-        
-        # print("\n" + "="*80)
-        # print("RAG PROMPT (first 2000 chars):")
-        # print("="*80)
-        # print(rag_prompt[:2000])
-        # print("="*80 + "\n")
-
-        # ── Combine with custom prompt if provided ──────────────────────────
-        if custom_prompt:
-            enhanced_prompt = f"""
-System: {system_name}
-
-Additional Requirements: {custom_prompt}
-
-{rag_prompt}
-"""
-        else:
-            enhanced_prompt = rag_prompt
-
-        # Add dynamic field lines (extra form inputs)
         if dynamic_prompt_lines:
-            enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+            enriched_query += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+        if custom_prompt:
+            enriched_query += f"\n\nCustom Requirements:\n{custom_prompt}"
 
-        # ── Save the final prompt for debugging ─────────────────────────────
-        # print("\n" + "="*80)
-        # print("FINAL PROMPT SENT TO GEMINI:")
-        # print("="*80)
-        # print(enhanced_prompt[:2000] + "..." if len(enhanced_prompt) > 2000 else enhanced_prompt)
-        # print("="*80)
-        # print(f"FINAL PROMPT LENGTH: {len(enhanced_prompt)} characters")
-        # print("="*80 + "\n")
+        enriched_query += f"""
+        IMPORTANT:
+        - EXACTLY {MAX_NODES} component nodes
+        - EXACTLY {MAX_EDGES} edges
+        - Max 4 groups
+        """
 
-        # Save to file for inspection
+        # ── Run pipeline ───────────────────────────────────────────────────
+        all_docs = load_all_documents()
+        graph = build_graph(all_docs)
+
+        result = graph.invoke({
+            "user_query": system_name,
+            "enriched_query": enriched_query,
+            "documents": [],
+            "architecture": {},
+            "threats": [],
+            "damage_details": [],
+            "threat_scenarios": [],
+            "attacks": [],
+            "answer": "",
+            "retry_count": 0,
+            "full_prompt": "",
+            "eval_score": 0,
+            "eval_details": {}
+        })
+
+        final_answer = result.get("answer", "{}")
+
         try:
-            with open("backend_prompt.txt", "w", encoding="utf-8") as f:
-                f.write(enhanced_prompt)
-            print("✅ Prompt saved to backend_prompt.txt")
+            tara_json = json.loads(final_answer) if isinstance(final_answer, str) else final_answer
         except Exception as e:
-            print(f"Could not save prompt to file: {e}")
+            raise ValueError(f"Invalid JSON from pipeline: {e}")
 
-        # ── Call Gemini ────────────────────────────────────────────────────
-        print("Calling Gemini API...")
-        response = gemini_client.generate_content(enhanced_prompt)
-        output = gemini_client.get_text(response).strip()
-
-        # Print Gemini response
-        # print("\n" + "="*80)
-        # print("GEMINI RESPONSE (first 1000 chars):")
-        # print("="*80)
-        # print(output[:1000])
-        # print("="*80 + "\n")
-
-        # Clean markdown fences and JS-style comments
-        cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
-        cleaned = re.sub(r'//.*', '', cleaned)
-
-        # ── Parse JSON using RAG's parse_and_fix ───────────────────────────
-        tara_json = rag_parse_and_fix(cleaned)
-
-        if tara_json is None:
-            # Fallback to manual parsing
-            try:
-                tara_json = json.loads(cleaned)
-                print("✅ Successfully parsed JSON from Gemini (manual)")
-            except json.JSONDecodeError as e:
-                print(f"❌ JSON parse error: {e}")
-                print(f"Raw output: {cleaned[:500]}...")
-                raise ValueError(f"Invalid JSON from Gemini: {e}")
-
-        # ── Ensure UUID stamping and cross-linking ─────────────────────────
-        if "assets" in tara_json:
-            tara_json = rag_stamp_uuids(tara_json)
-            tara_json = rag_crosslink_node_ids(tara_json)
-
-        # ── Extract template (nodes + edges) ──────────────────────────────
+        # ── Extract template ───────────────────────────────────────────────
         template_data = None
-        # print ("Extracting template data from Gemini response...", tara_json)
-        if "assets" in tara_json and isinstance(tara_json["assets"], dict):
-            if "template" in tara_json["assets"]:
-                template_data = tara_json["assets"]["template"]
-            else:
-                template_data = tara_json["assets"]
-        elif "nodes" in tara_json and "edges" in tara_json:
-            template_data = tara_json
-        elif "templates" in tara_json and isinstance(tara_json["templates"], dict):
-            template_data = tara_json["templates"]
-        else:
-            for key, value in tara_json.items():
-                if isinstance(value, dict) and "nodes" in value and "edges" in value:
-                    template_data = value
-                    break
 
-        if not template_data or not isinstance(template_data, dict):
-            print(f"Unexpected response structure: {json.dumps(tara_json, indent=2)[:500]}")
-            raise ValueError("Invalid response format from Gemini - missing nodes/edges")
+        print(f"Pipeline template: ", tara_json["Assets"]) 
+
+        if "Assets" in tara_json and tara_json["Assets"]:
+            first_asset = tara_json["Assets"][0]
+            template_data = first_asset.get("template") or first_asset
+        elif "template" in tara_json:
+            template_data = tara_json["template"]
+        elif "nodes" in tara_json:
+            template_data = tara_json
+        else:
+            raise ValueError("Invalid response format")
 
         minimal_nodes = template_data.get("nodes", [])
         minimal_edges = template_data.get("edges", [])
 
-        if not isinstance(minimal_nodes, list) or not isinstance(minimal_edges, list):
-            raise ValueError("Invalid response format from Gemini - nodes/edges must be lists")
+        print(f"RAW LLM → Nodes: {len(minimal_nodes)}, Edges: {len(minimal_edges)}")
 
-        # print(f"Generated {len(minimal_nodes)} nodes and {len(minimal_edges)} edges")
+        # ── OPTIONAL HARD LIMIT (safe, no helpers) ─────────────────────────
+        group_nodes = [n for n in minimal_nodes if n.get("type") == "group"]
+        component_nodes = [n for n in minimal_nodes if n.get("type") != "group"]
 
-        # In generate_reactflow_template, update the processed_nodes section:
+        component_nodes = component_nodes[:MAX_NODES]
+        
+        # Ensure all nodes have required fields
+        for node in component_nodes:
+            if "data" not in node:
+                node["data"] = {}
+            if "label" not in node["data"] and "label" in node:
+                node["data"]["label"] = node["label"]
+            if "id" not in node:
+                node["id"] = str(uuid.uuid4())
+            if "type" not in node:
+                node["type"] = "default"
+        
+        for node in group_nodes:
+            if "data" not in node:
+                node["data"] = {}
+            if "label" not in node["data"] and "label" in node:
+                node["data"]["label"] = node["label"]
+            if "id" not in node:
+                node["id"] = str(uuid.uuid4())
+            node["type"] = "group"
+        
+        final_nodes = group_nodes + component_nodes
+        final_edges = minimal_edges[:MAX_EDGES]
 
-        processed_nodes = []
-        for node in minimal_nodes:
-            # Get existing style or create default
-            node_style = node.get("data", {}).get("style", {})
-            
-            processed_node = {
-                "id": node.get("id", str(uuid.uuid4())),
-                "type": node.get("type", "default"),
-                "parentId": node.get("parentId"),
-                "data": {
-                    "label": node.get("data", {}).get("label", ""),
-                    "description": node.get("data", {}).get("description", ""),
-                    "style": {
-                        "backgroundColor": node_style.get("backgroundColor", "#f0f0f0"),
-                        "borderColor": node_style.get("borderColor", "gray"),
-                        "borderStyle": node_style.get("borderStyle", "solid"),
-                        "borderWidth": node_style.get("borderWidth", "2px"),
-                        "color": node_style.get("color", "black"),
-                        "fontFamily": node_style.get("fontFamily", "Inter"),
-                        "fontSize": node_style.get("fontSize", "12px"),
-                        "fontWeight": node_style.get("fontWeight", 500),
-                        "height": node.get("data", {}).get("style", {}).get("height", 50),
-                        "width": node.get("data", {}).get("style", {}).get("width", 150)
-                    }
-                },
-                "properties": node.get("properties", []),
-                "isAsset": node.get("isAsset", False),
-                "width": node.get("width", 150),
-                "height": node.get("height", 50),
-                "position": node.get("position", {"x": 0, "y": 0}),
-                "positionAbsolute": node.get("positionAbsolute", {"x": 0, "y": 0}),
-                "zIndex": node.get("zIndex", 0)
-            }
-            processed_nodes.append(processed_node)
-        # Calculate node positions for better layout
-        from app.Methods.helpers import calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes
+        print(f"AFTER TRIM → Nodes: {len(final_nodes)}, Edges: {len(final_edges)}")
 
-        # Build basic nodes with proper sizing
-        basic_nodes = [build_basic_node(node) for node in minimal_nodes]
-
-        # Adjust group sizes based on children
-        adjusted_nodes = adjust_group_sizes(basic_nodes)
-        positioned_nodes = calculate_node_positions(adjusted_nodes)
-
-        # Trim group heights to actual content — removes empty space at the bottom
+        # ── MANUAL POSITIONING AND GROUP HANDLING ───────────────────────────
+        print("\n" + "="*60)
+        print("APPLYING MANUAL POSITIONING AND GROUP HANDLING")
+        print("="*60)
+        
+        # Step 1: Calculate initial positions (avoid overlap)
+        print("  📍 Step 1: Calculating initial positions...")
+        positioned_nodes = calculate_node_positions(final_nodes, final_edges)
+        
+        # Step 2: Ensure children are inside groups and adjust group sizes
+        print("  📦 Step 2: Adjusting group sizes based on children...")
         positioned_nodes = recalculate_group_heights_from_children(positioned_nodes)
-
-        # Now place ungrouped nodes just below the trimmed groups (no inflated gap)
-        positioned_nodes = position_ungrouped_nodes(positioned_nodes)
-
-        # Process edges with default values
-        normalized_edges = []
-        for e in minimal_edges:
-            edge = dict(e)
-            edge.setdefault("sourceHandle", "bottom")
-            edge.setdefault("targetHandle", "top")
-            edge.setdefault("type", "step")
-            edge.setdefault("animated", True)
-            edge.setdefault("markerEnd", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18})
-            edge.setdefault("markerStart", {"type": "arrowclosed", "color": "#64B5F6", "width": 18, "height": 18, "orient": "auto-start-reverse"})
-            edge.setdefault("style", {"stroke": "#808080", "strokeWidth": 2, "end": True, "start": True})
-            normalized_edges.append(edge)
-
-        from app.Methods.helpers import build_full_edge
-        full_edges = [build_full_edge(e) for e in normalized_edges]
+        
+        # Step 3: Position ungrouped nodes and resolve any remaining overlap
+        print("  🔧 Step 3: Positioning ungrouped nodes...")
+        positioned_nodes = position_ungrouped_nodes(positioned_nodes, final_edges)
+        
+        # Step 4: Final pass to adjust group sizes (in case positioning changed)
+        print("  📐 Step 4: Final group size adjustment...")
+        positioned_nodes = adjust_group_sizes(positioned_nodes)
+        
+        # Step 5: Apply standard styling and properties to all nodes
+        print("  🎨 Step 5: Applying standard styling...")
+        for node in positioned_nodes:
+            node_type = node.get("type", "default")
+            is_group = node_type == "group"
+            
+            # Set default dimensions
+            if is_group:
+                if "width" not in node:
+                    node["width"] = 800
+                if "height" not in node:
+                    node["height"] = 500
+                bg_color = "#dadada"
+            else:
+                if "width" not in node:
+                    node["width"] = 150
+                if "height" not in node:
+                    node["height"] = 60
+                bg_color = "#FFFFFF" if node_type == "default" else "#e3e896"
+            
+            # Ensure data object exists
+            if "data" not in node:
+                node["data"] = {}
+            
+            # Set label if missing
+            if "label" not in node["data"]:
+                node["data"]["label"] = node.get("id", "Node")
+            
+            # Set nodeId
+            node["data"]["nodeId"] = node.get("id")
+            
+            # Set style
+            node["data"]["style"] = {
+                "backgroundColor": bg_color,
+                "borderColor": "gray",
+                "borderStyle": "solid",
+                "borderWidth": "2px",
+                "color": "black",
+                "fontFamily": "Inter",
+                "fontSize": "12px" if not is_group else "16px",
+                "fontStyle": "normal",
+                "fontWeight": 500,
+                "height": node["height"],
+                "textAlign": "center",
+                "textDecoration": "none",
+                "width": node["width"]
+            }
+            
+            # Set properties
+            if "properties" not in node:
+                node["properties"] = ["Integrity", "Confidentiality", "Authenticity", 
+                                      "Authorization", "Availability", "Non-repudiation"]
+            
+            # Set zIndex
+            if is_group:
+                node["zIndex"] = 0
+            else:
+                node["zIndex"] = 1 if node.get("parentId") else 2
+            
+            # Set dragging flags
+            node["dragging"] = False
+            node["selected"] = False
+            node["resizing"] = False
+            node["isAsset"] = False
+            
+            # Ensure positionAbsolute matches position
+            if "position" in node and "positionAbsolute" not in node:
+                node["positionAbsolute"] = node["position"].copy()
+        
+        # Step 6: Process edges - ensure source/target exist and add styling
+        print("  🔗 Step 6: Processing edges...")
+        valid_node_ids = {n.get("id") for n in positioned_nodes}
+        
+        processed_edges = []
+        for edge in final_edges:
+            source_id = edge.get("source")
+            target_id = edge.get("target")
+            
+            # Skip if source or target doesn't exist
+            if source_id not in valid_node_ids or target_id not in valid_node_ids:
+                print(f"    ⚠️ Skipping edge {source_id} → {target_id} (node not found)")
+                continue
+            
+            # Build proper edge structure
+            edge_label = edge.get("label", edge.get("data", {}).get("label", ""))
+            if not edge_label:
+                edge_label = edge.get("name", "Connection")
+            
+            full_edge = build_full_edge(source_id, target_id, edge_label)
+            
+            # Preserve any additional properties
+            if "properties" in edge:
+                full_edge["properties"] = edge["properties"]
+            
+            processed_edges.append(full_edge)
+        
+        print(f"  ✅ Final: {len(positioned_nodes)} nodes, {len(processed_edges)} edges")
+        print("="*60 + "\n")
 
         final_template = {
             "nodes": positioned_nodes,
-            "edges": full_edges,
+            "edges": processed_edges,
         }
 
-        # ── Generate Derivations and Details using helper function ───────────
-        # print("Generating Derivations and Details using getDerivationsAndDetails...")
-        
-        # Extract existing details if any (for preserving IDs)
-        existing_details = {}
-        
-        # Call the helper function to generate Derivations and Details
-        Derivations, Details = getDerivationsAndDetails(final_template, existing_details)
-        
-        # print(f"Generated {len(Derivations)} derivations and {len(Details)} details")
+        # ── Derivations & Details ──────────────────────────────────────────
+        derivations_from_pipeline = []
+        details_from_pipeline = []
 
-        # ── Store model in DB ──────────────────────────────────────────────
+        if "Assets" in tara_json and tara_json["Assets"]:
+            first_asset = tara_json["Assets"][0]
+            derivations_from_pipeline = first_asset.get("Derivations", [])
+            details_from_pipeline = first_asset.get("Details", [])
+
+        if not derivations_from_pipeline and not details_from_pipeline:
+            derivations_from_pipeline, details_from_pipeline = getDerivationsAndDetails(final_template, {})
+
+        # ── Store DB ───────────────────────────────────────────────────────
         from datetime import datetime
-        current = datetime.now()
-        model_doc = {
-            "name":         system_name,
-            "template":     [],
-            "created_by":   created_by,
-            "created_at":   current,
-            "last_updated": current,
-            "user_id":      user_id,
-            "status":       1,
-            "type":         "model",
-        }
-        result = db.Models.insert_one(model_doc)
-        model_id = str(result.inserted_id)
 
-        # Store asset with template
+        current = datetime.now()
+
+        model_doc = {
+            "name": system_name,
+            "template": [],
+            "created_by": created_by,
+            "created_at": current,
+            "last_updated": current,
+            "user_id": user_id,
+            "status": 1,
+            "type": "model",
+        }
+
+        result_model = db.Models.insert_one(model_doc)
+        model_id = str(result_model.inserted_id)
+
         db.Assets.insert_one({
-            "model_id":        model_id,
-            "template":        final_template,
-            "asset_name":      f"{system_name}-asset",
+            "model_id": model_id,
+            "template": final_template,
+            "asset_name": f"{system_name}-asset",
             "asset_properties": "",
-            "Details":         Details,
+            "Details": details_from_pipeline,
         })
 
-        # Store damage scenarios with derivations and details
         db.Damage_scenarios.update_one(
             {"model_id": model_id, "type": "Derived"},
             {
                 "$set": {
-                    "model_id":    model_id,
-                    "type":        "Derived",
-                    "Derivations": Derivations,
-                    "Details":     Details,
+                    "model_id": model_id,
+                    "type": "Derived",
+                    "Derivations": derivations_from_pipeline,
+                    "Details": details_from_pipeline,
                 }
             },
             upsert=True,
         )
 
-        # node_count = len(positioned_nodes)
-        # edge_count = len(full_edges)
-        # deriv_count = len(Derivations)
-        # ds_count = len(Details)
-        # print(f"   Nodes         : {node_count}")
-        # print(f"   Edges         : {edge_count}")
-        # print(f"   Derivations   : {deriv_count}")
-        # print(f"   Damage details: {ds_count}")
-
         result_data = {
-            "message":     "Template generated and stored successfully",
-            "model_id":    model_id,
-            "template":    final_template,
+            "message": "Generated successfully (with manual positioning)",
+            "model_id": model_id,
+            "template": final_template,
             "system_name": system_name,
-            "derivations": Derivations,
-            "details":     Details,
+            "derivations": derivations_from_pipeline,
+            "details": details_from_pipeline,
+            "positioning_stats": {
+                "total_nodes": len(positioned_nodes),
+                "group_nodes": len([n for n in positioned_nodes if n.get("type") == "group"]),
+                "component_nodes": len([n for n in positioned_nodes if n.get("type") != "group"]),
+                "edges": len(processed_edges)
+            }
         }
 
         if standalone:
             return result_data
+
         return current_app.response_class(
             response=json.dumps(result_data, cls=JSONEncoder),
             status=201,
@@ -483,9 +528,8 @@ Additional Requirements: {custom_prompt}
         traceback.print_exc()
         if standalone:
             raise e
-        return jsonify({"error in item definition": str(e)}), 500
-
-
+        return jsonify({"error": str(e)}), 500
+    
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
@@ -494,7 +538,7 @@ def generate_object_id():
 # Wrapper Flask endpoint
 @modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
 def create_damage_scenarios_with_rag(standalone=False, request_data=None):
-    """Generate damage scenarios using RAG-enhanced prompts - stores as User-defined type"""
+    """Generate damage scenarios using RAG-enhanced prompts - stores as User-defined type only"""
     try:
         # Match item definition's request handling exactly
         if not request_data:
@@ -549,280 +593,228 @@ def create_damage_scenarios_with_rag(standalone=False, request_data=None):
         print(f"DEBUG: system_name = {system_name}")
         print(f"DEBUG: template nodes = {len(template.get('nodes', []))}")
 
-        # ── RAG Setup (same as item definition) ───────────────────────────────
-        from app.v1.rag.components import (
-            resolve_ecu as rag_resolve_ecu,
-            build_enriched_query as rag_build_enriched_query,
-            stamp_uuids as rag_stamp_uuids,
-            crosslink_node_ids as rag_crosslink_node_ids,
-            parse_and_fix as rag_parse_and_fix,
+        # ── Build User-defined Damage Scenarios using the prompt ──
+        
+        from app.v1.rag.prompt import DAMAGE_PROMPT
+        import jinja2
+        
+        # Render the DAMAGE_PROMPT template
+        tmpl = jinja2.Template(DAMAGE_PROMPT)
+        base_prompt = tmpl.render(
+            architecture=json.dumps({"template": template}, indent=2)
         )
-        from app.v1.rag.ingest import load_all_documents
-        from app.v1.rag.pipeline import build_pipeline
-        from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
-        from haystack.components.builders import PromptBuilder
-
-        # ── ECU resolution (same as item definition) ─────────────────────────
-        print(f"Resolving ECU for damage scenarios: {system_name}")
         
-        ecu_entry = rag_resolve_ecu(system_name)
-        if ecu_entry:
-            print(f"Matched ECU  : {ecu_entry['name']}")
-            print(f"Type         : {ecu_entry['type']}")
-
-        # Build enriched query (same as item definition)
-        enriched_query = rag_build_enriched_query(system_name, ecu_entry)
+        # Add user/custom prompts
+        additional_instructions = ""
         
-        # Add architecture context to the question
-        architecture_context = f"""
-        IMPORTANT: The following system architecture has already been defined.
-        You MUST reference ONLY these existing components when generating damage scenarios.
-        
-        Existing Components (with their IDs):
-        {json.dumps([{
-            'id': node.get('id'),
-            'label': node.get('data', {}).get('label'),
-            'type': node.get('type')
-        } for node in template.get('nodes', [])], indent=2)}
-        """
-        
-        # Build the question (like item definition)
-        question = f"""
-        SYSTEM REQUEST: Generate cybersecurity damage scenarios for the {system_name} system.
-        
-        {architecture_context}
-        
-        Generate realistic damage scenarios following ISO/SAE 21434 Clause 15.
-        Each damage scenario must reference specific components from the architecture above.
-        """
-        
-        # Add user/custom prompts if provided
         if user_prompt:
-            question += f"\n\nAdditional User Requirements:\n{user_prompt}"
+            additional_instructions += f"\n\n### ADDITIONAL USER REQUIREMENTS:\n{user_prompt}\n"
         
         if custom_prompt:
-            question += f"\n\nCustom Requirements:\n{custom_prompt}"
+            additional_instructions += f"\n\n### CUSTOM REQUIREMENTS:\n{custom_prompt}\n"
         
-        # Add dynamic fields if any
         if dynamic_prompt_lines:
-            question += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
+            additional_instructions += f"\n\n### ADDITIONAL SYSTEM DETAILS:\n{dynamic_prompt_lines}\n"
         
+        # Combine the prompt
+        final_prompt = base_prompt + additional_instructions
+
         print("\n" + "="*80)
-        print("ENRICHED QUERY (for LLM):")
+        print("FINAL PROMPT (first 1500 chars):")
         print("="*80)
-        print(question[:1000] + "..." if len(question) > 1000 else question)
+        print(final_prompt[:1500] + "..." if len(final_prompt) > 1500 else final_prompt)
         print("="*80 + "\n")
 
-        # ── Load documents and build pipeline (same as item definition) ──────
-        print(f"Loading documents from Azure and building RAG pipeline...")
-        
-        all_docs = load_all_documents()
-        pipeline, _ = build_pipeline(all_docs)
-        
-        # Retrieve documents
-        print(f"Retrieving documents for system: {system_name}")
-        
-        retrieval_result = pipeline.run(
-            {
-                "text_embedder": {"text": system_name},
-                "prompt_builder": {"question": question},
-            },
-            include_outputs_from=["retriever"],
-        )
-        
-        retrieved_docs = retrieval_result["retriever"]["documents"]
-        print(f"Retrieved {len(retrieved_docs)} documents")
-        
-        # ── Build prompt using TARA_PROMPT_TEMPLATE (same as item definition) ──
-        print("Building prompt using TARA_PROMPT_TEMPLATE from prompt.py...")
-        
-        prompt_builder = PromptBuilder(
-            template=TARA_PROMPT_TEMPLATE,
-            required_variables=["documents", "question"],
-        )
-        
-        prompt_result = prompt_builder.run(
-            documents=retrieved_docs,
-            question=question
-        )
-        
-        rag_prompt = prompt_result["prompt"]
-        
-        print(f"RAG prompt built with {len(retrieved_docs)} retrieved documents")
-        print(f"RAG prompt length: {len(rag_prompt)} characters")
-
-        # ── Combine with custom prompt if provided ──────────────────────────
-        if custom_prompt:
-            enhanced_prompt = f"""
-System: {system_name}
-
-Additional Requirements: {custom_prompt}
-
-{rag_prompt}
-"""
-        else:
-            enhanced_prompt = rag_prompt
-
-        # Add dynamic field lines if any
-        if dynamic_prompt_lines:
-            enhanced_prompt += f"\n\nAdditional System Details:\n{dynamic_prompt_lines}"
-
-        # Add user prompt if provided
-        if user_prompt:
-            enhanced_prompt += f"\n\nUser Requirements:\n{user_prompt}"
-
-        # ── Save the final prompt for debugging ─────────────────────────────
-        print("\n" + "="*80)
-        print("FINAL PROMPT SENT TO GEMINI:")
-        print("="*80)
-        print(enhanced_prompt[:2000] + "..." if len(enhanced_prompt) > 2000 else enhanced_prompt)
-        print("="*80 + "\n")
-
-        # Save to file for inspection
+        # Save prompt for debugging
         try:
             with open("damage_scenario_prompt.txt", "w", encoding="utf-8") as f:
-                f.write(enhanced_prompt)
+                f.write(final_prompt)
             print("✅ Damage scenario prompt saved to damage_scenario_prompt.txt")
         except Exception as e:
-            print(f"Could not save prompt to file: {e}")
+            print(f"Could not save prompt: {e}")
 
-        # ── Call Gemini ─────────────────────────────────────────────────────
+        # ── Call Gemini using the RAG generator from pipeline ──
+        from app.v1.rag.pipeline import setup as pipeline_setup
+        from app.v1.rag.ingest import load_all_documents
+        
+        print("Loading documents and calling Gemini with RAG context...")
+        all_docs = load_all_documents()
+        retriever, generator, text_embedder = pipeline_setup(all_docs)
+        
+        # Retrieve relevant documents for context
+        embedding = text_embedder.run(text=system_name)["embedding"]
+        retrieval_result = retriever.run(query_embedding=embedding)
+        retrieved_docs = retrieval_result["documents"][:3]  # Top 3 documents
+        
+        # Add retrieved documents context to prompt
+        doc_context = "\n\n### RETRIEVED REFERENCE DOCUMENTS:\n"
+        for doc in retrieved_docs:
+            content = getattr(doc, 'content', str(doc))[:1500]  # Limit content length
+            source = getattr(doc, 'meta', {}).get('source', 'Unknown')
+            doc_context += f"\n---\nSource: {source}\n{content}\n---\n"
+        
+        final_prompt_with_context = final_prompt + doc_context
+        
         print("Calling Gemini API...")
-        response = gemini_client.generate_content(enhanced_prompt)
-        output = gemini_client.get_text(response).strip()
-
-        # Print Gemini response
+        result = generator.run(parts=[final_prompt_with_context])
+        output = result["replies"][0] if result["replies"] else "{}"
+        
+        # Print response preview
         print("\n" + "="*80)
         print("GEMINI RESPONSE (first 1000 chars):")
         print("="*80)
         print(output[:1000])
         print("="*80 + "\n")
 
-        # Clean markdown fences and JS-style comments
+        # Clean markdown fences
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
         cleaned = re.sub(r'//.*', '', cleaned)
-
-        # ── Parse JSON using RAG's parse_and_fix ────────────────────────────
-        tara_json = rag_parse_and_fix(cleaned)
-
-        if tara_json is None:
-            # Fallback to manual parsing
-            try:
-                tara_json = json.loads(cleaned)
-                print("✅ Successfully parsed JSON from Gemini (manual)")
-            except json.JSONDecodeError as e:
-                print(f"❌ JSON parse error: {e}")
-                print(f"Raw output: {cleaned[:500]}...")
-                raise ValueError(f"Invalid JSON from Gemini: {e}")
-
-        # ── Extract the damage scenarios structure ──────────────────────────
-        # The prompt.py returns JSON with assets and damage_scenarios
-        if "damage_scenarios" in tara_json:
-            scenarios = tara_json["damage_scenarios"]
-        else:
-            scenarios = tara_json
         
-        # Ensure the structure matches what the frontend expects
-        # The Details should be in the format that get_damage_scene() expects
-        if "Details" not in scenarios:
-            # Try to extract from Derivations if that's what was returned
-            if "Derivations" in scenarios and scenarios["Derivations"]:
-                scenarios["Details"] = []
-                for i, deriv in enumerate(scenarios["Derivations"], start=1):
-                    detail = {
-                        "Name": deriv.get("name", f"Damage Scenario {i}"),
-                        "Description": deriv.get("damage_scene", deriv.get("description", "")),
-                        "cyberLosses": deriv.get("cyberLosses", []),
-                        "impacts": deriv.get("impacts", {
-                            "Financial Impact": "Moderate",
-                            "Safety Impact": "Moderate",
-                            "Operational Impact": "Moderate",
-                            "Privacy Impact": "Moderate"
-                        }),
-                        "key": i,
-                        "_id": str(uuid.uuid4())
-                    }
-                    scenarios["Details"].append(detail)
-            else:
-                scenarios["Details"] = []
+        # Fix common JSON issues
+        cleaned = re.sub(r',\s*}', '}', cleaned)
+        cleaned = re.sub(r',\s*]', ']', cleaned)
 
-        # Ensure each detail has the required fields
+        # Parse JSON - expect { "type": "User-defined", "Details": [...] }
+        try:
+            # Try to extract JSON if there's extra text
+            json_match = re.search(r'\{.*\}(?=\s*$|\s*\[)', cleaned, re.DOTALL)
+            if json_match:
+                cleaned = json_match.group(0)
+            
+            damage_data = json.loads(cleaned)
+            
+            # Extract Details array
+            user_defined_details = []
+            
+            if "Details" in damage_data:
+                user_defined_details = damage_data["Details"]
+            elif "type" in damage_data and damage_data["type"] == "User-defined":
+                user_defined_details = damage_data.get("Details", [])
+            elif isinstance(damage_data, list):
+                user_defined_details = damage_data
+            else:
+                # Try to find Details anywhere
+                for key, value in damage_data.items():
+                    if isinstance(value, list) and len(value) > 0:
+                        if isinstance(value[0], dict) and "Name" in value[0]:
+                            user_defined_details = value
+                            break
+            
+            print(f"✅ Extracted {len(user_defined_details)} damage scenarios from response")
+            
+            if not user_defined_details:
+                raise ValueError("No Details array found in response")
+            
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"❌ Failed to parse response: {e}")
+            print(f"Raw output: {cleaned[:500]}")
+            return jsonify({
+                "error": "Failed to generate valid damage scenarios",
+                "details": str(e),
+                "raw_response": cleaned[:1000]
+            }), 500
+
+        # ── Validate and enhance each detail ──
+        component_nodes = [n for n in template.get("nodes", []) if n.get("type") != "group"]
         valid_node_ids = {node.get("id") for node in template.get("nodes", [])}
         valid_node_labels = {node.get("data", {}).get("label"): node.get("id") 
                             for node in template.get("nodes", [])}
         
-        for detail in scenarios.get("Details", []):
-            # Ensure _id exists
+        validated_details = []
+        for i, detail in enumerate(user_defined_details):
+            if not isinstance(detail, dict):
+                continue
+                
+            # Ensure required fields
+            if "Name" not in detail or not detail["Name"]:
+                raise ValueError(f"Scenario {i+1} missing 'Name' field")
+            
+            if "Description" not in detail or not detail["Description"]:
+                raise ValueError(f"Scenario {i+1} missing 'Description' field")
+            
+            # Ensure cyberLosses
+            if "cyberLosses" not in detail or not detail["cyberLosses"]:
+                raise ValueError(f"Scenario {i+1} missing 'cyberLosses' array")
+            
+            # Validate and fix nodeIds in cyberLosses
+            validated_losses = []
+            for loss in detail.get("cyberLosses", []):
+                if not isinstance(loss, dict):
+                    continue
+                    
+                loss_node_id = loss.get("nodeId", "")
+                loss_node_name = loss.get("node", "")
+                
+                # Check if nodeId is valid
+                if loss_node_id not in valid_node_ids:
+                    # Try to find by label
+                    if loss_node_name in valid_node_labels:
+                        loss["nodeId"] = valid_node_labels[loss_node_name]
+                        loss["node"] = loss_node_name
+                        validated_losses.append(loss)
+                    else:
+                        # Try partial match
+                        found = False
+                        for label, nid in valid_node_labels.items():
+                            if loss_node_name.lower() in label.lower() or label.lower() in loss_node_name.lower():
+                                loss["nodeId"] = nid
+                                loss["node"] = label
+                                validated_losses.append(loss)
+                                found = True
+                                break
+                        if not found:
+                            raise ValueError(f"Scenario {i+1}: Cannot find node '{loss_node_name}' (id: {loss_node_id}) in architecture")
+                else:
+                    validated_losses.append(loss)
+            
+            detail["cyberLosses"] = validated_losses
+            
+            # Ensure impacts
+            if "impacts" not in detail:
+                raise ValueError(f"Scenario {i+1} missing 'impacts' object")
+            
+            # Ensure each cyberLoss has required fields
+            for loss in detail["cyberLosses"]:
+                if "id" not in loss or not loss["id"]:
+                    loss["id"] = str(uuid.uuid4())
+                if "is_risk_added" not in loss:
+                    loss["is_risk_added"] = False
+                if "isSelected" not in loss:
+                    loss["isSelected"] = True
+            
+            # Add required fields
+            detail["key"] = i + 1
             if "_id" not in detail:
                 detail["_id"] = str(uuid.uuid4())
             
-            # Ensure key exists
-            if "key" not in detail:
-                detail["key"] = scenarios["Details"].index(detail) + 1
-            
-            # Ensure cyberLosses exists and references valid nodes
-            if "cyberLosses" not in detail:
-                detail["cyberLosses"] = []
-            
-            # Validate and fix node references
-            validated_losses = []
-            for loss in detail.get("cyberLosses", []):
-                if loss.get("nodeId") not in valid_node_ids:
-                    node_name = loss.get("node", "")
-                    if node_name in valid_node_labels:
-                        loss["nodeId"] = valid_node_labels[node_name]
-                        loss["node"] = node_name
-                        validated_losses.append(loss)
-                    else:
-                        print(f"Warning: Could not find node '{node_name}' for loss")
-                else:
-                    validated_losses.append(loss)
-            detail["cyberLosses"] = validated_losses
-            
-            # Ensure impacts exists
-            if "impacts" not in detail:
-                detail["impacts"] = {
-                    "Financial Impact": "Moderate",
-                    "Safety Impact": "Moderate",
-                    "Operational Impact": "Moderate",
-                    "Privacy Impact": "Moderate"
-                }
+            validated_details.append(detail)
+        
+        print(f"✅ Validated {len(validated_details)} damage scenarios")
 
-        print(f"Generated {len(scenarios.get('Details', []))} damage scenarios")
-
-        # ── Store in database as "User-defined" type ─────────────────────────
+        # ── Store in database as "User-defined" type only ──
         from datetime import datetime
         
         current_time = datetime.now()
         
-        # Check if damage scenarios already exist for this model with User-defined type
         existing = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
         
         if existing:
-            # Update existing - preserve existing derivations if any
-            update_data = {
-                "$set": {
-                    "Details": scenarios.get("Details", []),
-                    "last_updated": current_time
-                }
-            }
-            # Only update Derivations if they exist in the new data
-            if "Derivations" in scenarios:
-                update_data["$set"]["Derivations"] = scenarios["Derivations"]
-            
             result = db.Damage_scenarios.update_one(
                 {"model_id": model_id, "type": "User-defined"},
-                update_data
+                {
+                    "$set": {
+                        "Details": validated_details,
+                        "last_updated": current_time
+                    }
+                }
             )
             operation = "updated"
             scenario_id = str(existing["_id"])
         else:
-            # Insert new with type "User-defined"
             damage_doc = {
                 "model_id": model_id,
-                "type": "User-defined",  # Key change: Store as User-defined
-                "Details": scenarios.get("Details", []),
-                "Derivations": scenarios.get("Derivations", []),
+                "type": "User-defined",
+                "Details": validated_details,
                 "created_at": current_time,
                 "last_updated": current_time
             }
@@ -841,8 +833,7 @@ Additional Requirements: {custom_prompt}
             return obj
 
         safe_scenarios = convert_objectid({
-            "Details": scenarios.get("Details", []),
-            "Derivations": scenarios.get("Derivations", [])
+            "Details": validated_details
         })
 
         result_data = {
@@ -851,7 +842,7 @@ Additional Requirements: {custom_prompt}
             "model_id": model_id,
             "scenarios": safe_scenarios,
             "stats": {
-                "total_scenarios": len(safe_scenarios.get("Details", []))
+                "total_scenarios": len(validated_details)
             }
         }
 
@@ -865,6 +856,7 @@ Additional Requirements: {custom_prompt}
         if standalone:
             raise e
         return jsonify({"error in damage scenario generation": str(e)}), 500
+
 
 #4 - Threat scenario creation
 # Manual threat creation

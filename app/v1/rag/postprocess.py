@@ -92,10 +92,12 @@ def print_summary(tara_json: dict) -> None:
     """Print a short summary of the generated TARA JSON."""
     node_count  = len(tara_json.get("assets", {}).get("template", {}).get("nodes", []))
     edge_count  = len(tara_json.get("assets", {}).get("template", {}).get("edges", []))
+    details_count = len(tara_json.get("assets", {}).get("template", {}).get("details", []))
     deriv_count = len(tara_json.get("damage_scenarios", {}).get("Derivations", []))
     ds_count    = len(tara_json.get("damage_scenarios", {}).get("Details", []))
     print(f"   Nodes          : {node_count}")
     print(f"   Edges          : {edge_count}")
+    print(f"   Details        : {details_count}")
     print(f"   Derivations    : {deriv_count}")
     print(f"   Damage details : {ds_count}")
     print("   IDs            : all stamped as uuid4")

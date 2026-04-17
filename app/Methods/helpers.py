@@ -15,6 +15,8 @@ import uuid
 import json
 import re
 import math
+
+from typing import List, Dict, Any, Optional, Tuple
 from bs4 import BeautifulSoup
 
 def get_highest_impact(impacts):
@@ -415,43 +417,60 @@ def verify_no_overlaps(nodes):
                 print(f"Warning: Potential overlap between {a['id']} and {b['id']}")
 
 
-def build_full_edge(edge):
-    return {
-        "id": f"reactflow__edge-{edge['source']}{edge['sourceHandle']}-{edge['target']}{edge['targetHandle']}",
-        "type": edge["type"],
-        "source": edge["source"],
-        "target": edge["target"],
-        "sourceHandle": edge["sourceHandle"],
-        "targetHandle": edge["targetHandle"],
+def build_full_edge(source_id: str, target_id: str, label: str = "", 
+                    edge_type: str = "step") -> Dict:
+    """
+    Build a complete edge object for React Flow.
+    
+    Args:
+        source_id: Source node ID
+        target_id: Target node ID
+        label: Edge label (e.g., "SPI", "CAN")
+        edge_type: Type of edge
+    
+    Returns:
+        Edge dictionary
+    """
+    import uuid
+    
+    edge = {
+        "id": f"reactflow__edge-{source_id}b-{target_id}right",
+        "source": source_id,
+        "target": target_id,
+        "sourceHandle": "b",
+        "targetHandle": "right",
+        "type": edge_type,
+        "animated": True,
+        "selected": False,
+        "properties": ["Integrity"],
         "data": {
-            "label": edge["data"]["label"],
+            "label": label,
+            "offset": 0,
+            "t": 0.5
+        },
+        "markerEnd": {
+            "color": "#64B5F6",
+            "height": 18,
+            "type": "arrowclosed",
+            "width": 18
         },
         "markerStart": {
             "color": "#64B5F6",
             "height": 18,
             "orient": "auto-start-reverse",
             "type": "arrowclosed",
-            "width": 18,
-        },
-        "markerEnd": {
-            "color": "#64B5F6",
-            "height": 18,
-            "type": "arrowclosed",
-            "width": 18,
+            "width": 18
         },
         "style": {
-            "stroke": "#808080",
-            "strokeWidth": 2,
-            "strokeDasharray": "0",
-            "start": True,
             "end": True,
-        },
-        "properties": edge.get("properties", []),
-        "animated": True,
-        "selected": False,
+            "start": True,
+            "stroke": "#808080",
+            "strokeDasharray": "0",
+            "strokeWidth": 2
+        }
     }
-
-
+    
+    return edge
 
 def threat_type(value: str) -> str:
     """
@@ -918,3 +937,4 @@ def calculate_average_impacts(threats):
         averaged_impacts[impact_type] = REVERSE_MAP[closest_score]
 
     return averaged_impacts
+
