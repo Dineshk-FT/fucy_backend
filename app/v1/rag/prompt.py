@@ -8,12 +8,12 @@
 #   Damage Analyst   → DAMAGE_PROMPT     → Damage impact assessments
 #
 # TARA_PROMPT_TEMPLATE is retained for backward compatibility but is NOT
-# called by any pipeline node. See the individual agent prompts below.
+# called by any pipeline node.
 # =============================================================================
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REFERENCE SCHEMA (imported by pipeline.py but NOT rendered by any node)
+# REFERENCE SCHEMA (not used by any pipeline node)
 # ─────────────────────────────────────────────────────────────────────────────
 
 TARA_PROMPT_TEMPLATE = """
@@ -41,9 +41,12 @@ You are a Principal Automotive Systems Architect specializing in ISO 21434 TARA.
 
 SYSTEM TO ARCHITECT: {{ question }}
 
-{% if bms_context %}
-### REFERENCE BMS ARCHITECTURE (from Azure):
-{{ bms_context }}
+{% if ecu_hint_context %}
+{{ ecu_hint_context }}
+{% endif %}
+
+{% if ref_context %}
+{{ ref_context }}
 {% endif %}
 
 ### RETRIEVED CYBERSECURITY & REFERENCE CONTEXT:
@@ -53,73 +56,72 @@ SYSTEM TO ARCHITECT: {{ question }}
 ---
 {% endfor %}
 
-### CRITICAL REQUIREMENT - EXACT COUNTS:
+### CRITICAL REQUIREMENT — EXACT COUNTS:
 ⚠️ YOU MUST GENERATE EXACTLY {{ max_nodes }} COMPONENT NODES (type "default" or "data").
 ⚠️ YOU MUST GENERATE EXACTLY {{ max_edges }} EDGES (connections between nodes).
 ⚠️ YOU MUST GENERATE NO MORE THAN {{ max_groups }} GROUP CONTAINERS (type "group").
 - Groups (type "group") DO NOT count toward the {{ max_nodes }} limit.
-- Count your component nodes before outputting. If you have more or less than {{ max_nodes }}, REGENERATE.
-- Count your edges before outputting. If you have more or less than {{ max_edges }}, REGENERATE.
-- Count your groups. If you have more than {{ max_groups }} groups, REGENERATE.
+- Count your component nodes before outputting. Regenerate if the count is wrong.
+- Count your edges before outputting. Regenerate if the count is wrong.
 
 ### YOUR TASK:
 Design a professional-grade system architecture for "{{ question }}" with:
 - EXACTLY {{ max_nodes }} component nodes (excluding groups)
 - EXACTLY {{ max_edges }} edges
-- NO MORE THAN {{ max_groups }} group containers for organization (1-{{ max_groups }} groups is acceptable)
+- NO MORE THAN {{ max_groups }} group containers
 
-{% if bms_context %}
-⚠️ USE THE REFERENCE BMS ARCHITECTURE ABOVE AS YOUR EXACT TEMPLATE.
-Copy the same number of nodes, same types, same edge patterns.
+{% if ecu_hint_context %}
+⚠️ The ECU SPECIFICATION HINT above is authoritative. Generate ONLY the assets
+listed there. Do NOT invent components that are not mentioned in the hint.
+{% endif %}
+
+{% if ref_context %}
+⚠️ The REFERENCE ARCHITECTURE above shows a real system of the same type.
+Use its node/edge count and connectivity patterns as your structural template,
+but rename and adapt all nodes to match the TARGET SYSTEM exactly.
 {% endif %}
 
 ### ARCHITECTURE RULES:
 
-1. **COMPONENT LIST (generate exactly these {{ max_nodes }} components):**
-   Based on the reference context, select the {{ max_nodes }} most critical components for this system.
-   Example for BMS: MCU, Cell Monitor, Voltage Monitor, Temperature Sensor, Current Sensor, 
-   CAN Transceiver, Power Supply, Watchdog, Flash Memory, RAM, Debug Port, External EEPROM, 
-   Balancing FETs, Communication IC.
+1. **COMPONENT LIST (generate exactly {{ max_nodes }} components):**
+   Base your component list on:
+   a) The ECU Specification Hint above (highest priority — if provided).
+   b) The Reference Architecture above (structural template — if provided).
+   c) The Retrieved Context below (cybersecurity knowledge).
+   d) Your own expertise in automotive ECU architecture for this system type.
 
 2. **GROUP CONTAINERS (maximum {{ max_groups }} groups):**
-   Use groups to organize components logically. Examples:
-   - "MCU and Core Components" group
-   - "Power Management" group
-   - "Communication Interfaces" group
-   - "External Interfaces" group
+   Use groups to organise components logically. Typical groupings:
+   - Core processing group (MCU, memory, watchdog)
+   - Communication interfaces group (CAN, LIN, Ethernet transceivers)
+   - Power/analog group (power supply, sensors, ADCs)
+   - External interfaces group (debug port, OBD, V2X, cloud)
    DO NOT create more than {{ max_groups }} group nodes.
 
-3. **NODE IDs** — Use short, stable, lowercase, hyphenated strings:
-   CORRECT: `"bms-cellmonitor"`, `"bms-mcu-group"`, `"ext-vehicle"`
-   WRONG:   UUIDs, bare numbers like "1", or labels with spaces.
+3. **NODE IDs** — Use short, stable, lowercase, hyphenated strings derived from
+   the system name. Examples for an ABS ECU: `abs-mcu`, `abs-can`, `abs-flashmem`.
+   WRONG: UUIDs, bare numbers, or labels with spaces.
 
 4. **EDGES (exactly {{ max_edges }} connections):**
-   Create realistic connections between the {{ max_nodes }} components you defined.
    Each edge must have:
-   - source: valid node ID from your components
-   - target: valid node ID from your components
-   - label: short protocol (CAN, SPI, I2C, UART, IO_PINS, etc.)
-   
-   Example edge list for BMS ({{ max_edges }} edges):
-   1. MCU → Cell Monitor (SPI)
-   2. MCU → CAN Transceiver (SPI)
-   3. MCU → Flash Memory (SPI)
-   4. MCU → Watchdog (IO_PINS)
-   5. MCU → Debug Port (UART)
-   6. Cell Monitor → Voltage Monitor (IO_PINS)
-   7. Cell Monitor → Temperature Sensor (IO_PINS)
-   8. MCU → Current Sensor (ADC)
-   9. MCU → Power Supply (IO_PINS)
-   10. CAN Transceiver → External Vehicle (CAN)
-   11. MCU → Balancing FETs (IO_PINS)
+   - source: valid node ID from your component list
+   - target: valid node ID from your component list
+   - label: short protocol name (CAN, SPI, I2C, UART, ADC, IO_PINS, Ethernet, etc.)
+   Every component should have at least one connection.
 
-5. **VERIFICATION CHECKLIST (complete before output):**
+5. **DETAILS — one entry per component node:**
+   Each Detail entry maps a component to its security-relevant properties
+   (CIA triad, STRIDE threats, asset sensitivity). Use the nodeId of the
+   component it describes.
+
+6. **VERIFICATION CHECKLIST (complete before output):**
    □ I have exactly {{ max_nodes }} component nodes (type "default" or "data")
    □ I have exactly {{ max_edges }} edges
    □ I have {{ max_groups }} or fewer group containers
-   □ Every edge source and target matches a component node ID
+   □ Every edge source and target matches a real component node ID
    □ Groups do NOT count toward the {{ max_nodes }} limit
    □ No duplicate node IDs
+   □ All components are specific to "{{ question }}" (no generic placeholders)
 
 ### OUTPUT FORMAT:
 Return ONLY a valid JSON object. No markdown fences. No commentary.
@@ -128,11 +130,11 @@ Return ONLY a valid JSON object. No markdown fences. No commentary.
   "template": {
     "nodes": [
       {
-        "id": "sys-main-group",
+        "id": "<system-prefix>-main-group",
         "type": "group",
         "parentId": null,
         "data": {
-          "label": "System Name",
+          "label": "<System Name>",
           "style": {
             "backgroundColor": "rgba(33,150,243,0.05)",
             "borderColor": "#2196F3",
@@ -144,12 +146,12 @@ Return ONLY a valid JSON object. No markdown fences. No commentary.
         "height": 600,
         "width": 1000,
         "zIndex": 0
-      },
-      // Add up to {{ max_groups - 1 }} more group containers here (total ≤ {{ max_groups }} groups)
-      // Add your {{ max_nodes }} component nodes here...
+      }
+      // Add up to {{ max_groups - 1 }} more group containers here (total ≤ {{ max_groups }})
+      // Add your {{ max_nodes }} component nodes here ...
     ],
     "edges": [
-      // Add exactly {{ max_edges }} edges here...
+      // Add exactly {{ max_edges }} edges here ...
     ]
   },
   "Details": [
@@ -157,6 +159,8 @@ Return ONLY a valid JSON object. No markdown fences. No commentary.
   ]
 }
 """
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. THREAT ANALYST AGENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -182,7 +186,7 @@ Generate exactly {{ max_threats }} high-priority technical threats, each targeti
 ### THREAT DISCOVERY RULES:
 
 1. **PIN TO NODE**: Each threat's `nodeId` MUST be the EXACT `id` value of a node from the architecture JSON above.
-   Example: If a node has `"id": "bms-cellmonitor"`, use `"nodeId": "bms-cellmonitor"`.
+   Example: If a node has `"id": "abs-mcu"`, use `"nodeId": "abs-mcu"`.
    Do NOT use the label, a UUID, or any invented string.
 
 2. **SPREAD**: Target DIFFERENT nodes. Do not cluster all threats on one component.
@@ -195,7 +199,8 @@ Generate exactly {{ max_threats }} high-priority technical threats, each targeti
 4. **LOSS TYPE**: Specify which cybersecurity property is lost using one of:
    `Integrity` | `Confidentiality` | `Authenticity` | `Authorization` | `Availability` | `Non-repudiation`
 
-5. **REASONING**: Ground threats in real attack patterns from CWE, CAPEC, or MITRE ATT&CK when available from the context.
+5. **REASONING**: Ground threats in real attack patterns from CWE, CAPEC, or MITRE ATT&CK
+   when available from the context.
 
 ### OUTPUT FORMAT:
 Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `{`.
@@ -228,14 +233,20 @@ Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. DAMAGE ANALYST AGENT - USER-DEFINED ONLY
+# 3. DAMAGE ANALYST AGENT
 # ─────────────────────────────────────────────────────────────────────────────
 
 DAMAGE_PROMPT = """
 You are a Damage Assessment Specialist performing ISO 21434 impact analysis for automotive systems.
 
+### TARGET SYSTEM:
+{{ question if question is defined else "Automotive ECU System" }}
+
 ### SYSTEM ARCHITECTURE:
 {{ architecture }}
+
+### IDENTIFIED THREATS:
+{{ threats }}
 
 ### YOUR TASK:
 Generate detailed, realistic cybersecurity damage scenarios for the system described above.
@@ -244,14 +255,14 @@ You MUST generate 10-15 comprehensive damage scenarios.
 ### DAMAGE SCENARIO REQUIREMENTS:
 
 Each damage scenario must include:
-1. **Name**: A short, descriptive title (max 8 words)
+1. **Name**: A short, descriptive title (max 8 words) specific to THIS system
 2. **Description**: Detailed technical explanation of the attack, its method, and consequences (2-4 sentences)
 3. **cyberLosses**: Array of cybersecurity properties affected (2-4 properties per scenario)
 4. **impacts**: Impact ratings for Financial, Safety, Operational, and Privacy domains
 
 ### CYBER LOSS PROPERTIES (use these exact names):
 - Integrity
-- Confidentiality  
+- Confidentiality
 - Authenticity
 - Authorization
 - Availability
@@ -267,31 +278,31 @@ Each damage scenario must include:
 - **Privacy**: Negligible=no PII | Minor=anonymized | Moderate=limited PII | Major=sensitive PII | Severe=mass breach
 
 ### SCENARIO DIVERSITY REQUIREMENTS:
-- Cover different components (MCU, memory, communication, sensors, power, etc.)
-- Include various attack types (physical, network, software, side-channel, supply chain)
-- Mix impact levels (some Severe, some Moderate, some Major)
-- Reference specific node IDs from the architecture above
+- Cover DIFFERENT components from this specific system (use nodeIds from the architecture above)
+- Include various attack types: physical, network, software, side-channel, supply chain
+- Mix impact levels — include Severe, Major, Moderate scenarios
+- Reference specific node IDs from the architecture above in each cyberLoss entry
+- Scenario names must be specific to this system type — avoid generic names like "Damage Scenario 1"
 
 ### OUTPUT FORMAT:
-Return ONLY a valid JSON object with this exact structure.
-No markdown fences. No extra text. Start with `{` and end with `}`.
+Return ONLY a valid JSON object. No markdown fences. No extra text. Start with `{` and end with `}`.
 
 {
   "type": "User-defined",
   "Details": [
     {
-      "Name": "Thermal Runaway via Calibration Tampering",
-      "Description": "Attacker modifies voltage/current thresholds in Data Flash, allowing the battery to operate outside the Safe Operating Area (SOA). This leads to uncontrolled overheating and potential fire.",
+      "Name": "<Specific scenario name for this system>",
+      "Description": "<Technical description of attack method and consequences.>",
       "cyberLosses": [
         {
           "name": "Integrity",
-          "node": "Data Flash",
-          "nodeId": "data-flash-uuid-or-id"
+          "node": "<Component Name>",
+          "nodeId": "<exact-node-id-from-architecture>"
         },
         {
-          "name": "Authenticity", 
-          "node": "Data Flash",
-          "nodeId": "data-flash-uuid-or-id"
+          "name": "Authenticity",
+          "node": "<Component Name>",
+          "nodeId": "<exact-node-id-from-architecture>"
         }
       ],
       "impacts": {
@@ -300,31 +311,13 @@ No markdown fences. No extra text. Start with `{` and end with `}`.
         "Operational Impact": "Severe",
         "Privacy Impact": "Negligible"
       }
-    },
-    {
-      "Name": "CAN Bus Denial of Service",
-      "Description": "Attacker floods the CAN bus with high-priority messages, preventing critical BMS messages from being transmitted. This causes delayed response to fault conditions.",
-      "cyberLosses": [
-        {
-          "name": "Availability",
-          "node": "CAN Transceiver",
-          "nodeId": "can-transceiver-uuid-or-id"
-        }
-      ],
-      "impacts": {
-        "Financial Impact": "Moderate",
-        "Safety Impact": "Severe",
-        "Operational Impact": "Major",
-        "Privacy Impact": "Negligible"
-      }
     }
   ]
 }
 
 ### IMPORTANT REMINDERS:
 - Generate 10-15 scenarios, not fewer
-- Use realistic, specific scenario names (avoid generic names like "Damage Scenario 1")
-- Descriptions must be detailed and technically accurate
+- Descriptions must be technically accurate for this specific system
 - Reference actual components from the architecture using their exact nodeId
 - Each scenario should have 2-4 cyberLosses on average
 - Vary the impact ratings across scenarios

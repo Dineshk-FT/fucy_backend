@@ -53,16 +53,16 @@ gemini_client = GeminiClient(GOOGLE_API_KEY, os.getenv("GEMINI_MODEL", "gemini-2
 # Path to dataecu.json — adjust to match your project layout
 ECU_DB_PATH = os.getenv("ECU_DB_PATH", "datasets/dataecu.json")
 
-# @modelprompt.route("/debug/env", methods=["GET"])
-# def debug_env():
-#     """Debug endpoint to check environment variables"""
-#     api_key = os.getenv("GOOGLE_API_KEY")
-#     return jsonify({
-#         "GOOGLE_API_KEY_exists": api_key is not None,
-#         "GOOGLE_API_KEY_length": len(api_key) if api_key else 0,
-#         "GOOGLE_API_KEY_preview": api_key[:10] + "..." if api_key else "Not set",
-#         "all_env_vars": {k: v for k, v in os.environ.items() if "KEY" in k or "API" in k}
-#     })
+@modelprompt.route("/debug/env", methods=["GET"])
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    api_key = os.getenv("GOOGLE_API_KEY")
+    return jsonify({
+        "GOOGLE_API_KEY_exists": api_key is not None,
+        "GOOGLE_API_KEY_length": len(api_key) if api_key else 0,
+        "GOOGLE_API_KEY_preview": api_key[:10] + "..." if api_key else "Not set",
+        "all_env_vars": {k: v for k, v in os.environ.items() if "KEY" in k or "API" in k}
+    })
 
 # @modelprompt.route("/test-gemini", methods=["GET"])
 # def test_gemini():
@@ -214,19 +214,20 @@ def generate_reactflow_template(standalone=False, request_data=None):
         from app.v1.rag.ingest import load_all_documents
         from app.v1.rag.pipeline import build_graph
         from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
-        from app.Methods.helpers import (
-            # calculate_node_positions,
-            # recalculate_group_heights_from_children,
-            # position_ungrouped_nodes,
-            # adjust_group_sizes,
+        from app.Methods.new_helpers import (
+            calculate_node_positions,
+            recalculate_group_heights_from_children,
+            position_ungrouped_nodes,
+            adjust_group_sizes,
             build_basic_node,
-            build_full_edge
+            build_full_edge,
+            generate_node_color,
+            generate_edge_stroke
         )
-
-        from app.Methods.new_helpers import calculate_node_positions, recalculate_group_heights_from_children, position_ungrouped_nodes, adjust_group_sizes
 
         MAX_NODES = 14
         MAX_EDGES = 11
+        MAX_GROUPS = 4
 
         # ── Build enriched query ───────────────────────────────────────────
         ecu_entry = rag_resolve_ecu(system_name)
@@ -241,7 +242,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
         IMPORTANT:
         - EXACTLY {MAX_NODES} component nodes
         - EXACTLY {MAX_EDGES} edges
-        - Max 4 groups
+        - Max {MAX_GROUPS} groups
         """
 
         # ── Run pipeline ───────────────────────────────────────────────────
@@ -274,7 +275,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
         # ── Extract template ───────────────────────────────────────────────
         template_data = None
 
-        print(f"Pipeline template: ", tara_json["Assets"]) 
+        print(f"Pipeline template: ", tara_json.get("Assets", []))
 
         if "Assets" in tara_json and tara_json["Assets"]:
             first_asset = tara_json["Assets"][0]
@@ -295,6 +296,10 @@ def generate_reactflow_template(standalone=False, request_data=None):
         group_nodes = [n for n in minimal_nodes if n.get("type") == "group"]
         component_nodes = [n for n in minimal_nodes if n.get("type") != "group"]
 
+        # Limit number of groups
+        group_nodes = group_nodes[:MAX_GROUPS]
+        
+        # Limit number of component nodes
         component_nodes = component_nodes[:MAX_NODES]
         
         # Ensure all nodes have required fields
@@ -327,41 +332,97 @@ def generate_reactflow_template(standalone=False, request_data=None):
         print("APPLYING MANUAL POSITIONING AND GROUP HANDLING")
         print("="*60)
         
-        # Step 1: Calculate initial positions (avoid overlap)
-        print("  📍 Step 1: Calculating initial positions...")
+        # Step 1: Ensure parent-child relationships are preserved
+        print("  🔗 Step 1: Building parent-child relationships...")
+        group_ids = {n.get("id") for n in final_nodes if n.get("type") == "group"}
+        
+        # Track which nodes should be inside which groups
+        for node in final_nodes:
+            if node.get("type") != "group":
+                # Try to determine parent based on naming or existing parentId
+                parent_candidates = [g for g in final_nodes if g.get("type") == "group"]
+                
+                # If parentId is already set, validate it exists
+                if node.get("parentId") and node["parentId"] in group_ids:
+                    # Parent already set correctly, do nothing
+                    pass
+                elif parent_candidates and not node.get("parentId"):
+                    # Try to assign based on naming convention or heuristics
+                    node_label = node.get("data", {}).get("label", "").lower()
+                    for group in parent_candidates:
+                        group_label = group.get("data", {}).get("label", "").lower()
+                        # If node label contains group label or vice versa, assign parent
+                        if group_label and (group_label in node_label or node_label in group_label):
+                            node["parentId"] = group.get("id")
+                            print(f"    Assigned {node.get('id')} to group {group.get('id')}")
+                            break
+        
+        # Step 2: Calculate positions with proper group containment
+        print("  📍 Step 2: Calculating positions with group containment...")
         positioned_nodes = calculate_node_positions(final_nodes, final_edges)
         
-        # Step 2: Ensure children are inside groups and adjust group sizes
-        print("  📦 Step 2: Adjusting group sizes based on children...")
+        # Step 3: Verify all children are inside their parent groups
+        print("  🔍 Step 3: Verifying children are inside parent groups...")
+        group_map = {n.get("id"): n for n in positioned_nodes if n.get("type") == "group"}
+        
+        for node in positioned_nodes:
+            if node.get("type") != "group" and node.get("parentId"):
+                parent = group_map.get(node["parentId"])
+                if parent:
+                    parent_x = parent.get("position", {}).get("x", 0)
+                    parent_y = parent.get("position", {}).get("y", 0)
+                    parent_w = parent.get("width", 800)
+                    parent_h = parent.get("height", 500)
+                    
+                    node_x = node.get("position", {}).get("x", 0)
+                    node_y = node.get("position", {}).get("y", 0)
+                    node_w = node.get("width", 150)
+                    node_h = node.get("height", 60)
+                    
+                    # Check if node is inside parent
+                    if (node_x < parent_x or node_x + node_w > parent_x + parent_w or
+                        node_y < parent_y or node_y + node_h > parent_y + parent_h):
+                        print(f"    ⚠️ Node {node.get('id')} is outside its parent group! Repositioning...")
+                        # Reposition inside parent
+                        padding = 30
+                        rel_x = padding + ((node_x - parent_x) % (parent_w - node_w - 2*padding)) if parent_w > node_w + 2*padding else padding
+                        rel_y = padding + ((node_y - parent_y) % (parent_h - node_h - 2*padding)) if parent_h > node_h + 2*padding else padding
+                        node["position"] = {"x": parent_x + rel_x, "y": parent_y + rel_y}
+                        node["positionAbsolute"] = node["position"].copy()
+                        print(f"    Repositioned to {node['position']}")
+        
+        # Step 4: Adjust group sizes based on children
+        print("  📦 Step 4: Adjusting group sizes based on children...")
         positioned_nodes = recalculate_group_heights_from_children(positioned_nodes)
         
-        # Step 3: Position ungrouped nodes and resolve any remaining overlap
-        print("  🔧 Step 3: Positioning ungrouped nodes...")
+        # Step 5: Position any remaining ungrouped nodes
+        print("  🔧 Step 5: Positioning ungrouped nodes...")
         positioned_nodes = position_ungrouped_nodes(positioned_nodes, final_edges)
         
-        # Step 4: Final pass to adjust group sizes (in case positioning changed)
-        print("  📐 Step 4: Final group size adjustment...")
+        # Step 6: Final pass to adjust group sizes again
+        print("  📐 Step 6: Final group size adjustment...")
         positioned_nodes = adjust_group_sizes(positioned_nodes)
         
-        # Step 5: Apply standard styling and properties to all nodes
-        print("  🎨 Step 5: Applying standard styling...")
+        # Step 7: Apply styling with random colors
+        print("  🎨 Step 7: Applying styling with random colors...")
         for node in positioned_nodes:
             node_type = node.get("type", "default")
             is_group = node_type == "group"
             
-            # Set default dimensions
+            # Set default dimensions if missing
             if is_group:
                 if "width" not in node:
                     node["width"] = 800
                 if "height" not in node:
                     node["height"] = 500
-                bg_color = "#dadada"
             else:
                 if "width" not in node:
                     node["width"] = 150
                 if "height" not in node:
                     node["height"] = 60
-                bg_color = "#FFFFFF" if node_type == "default" else "#e3e896"
+            
+            # Generate random colors using the helper function
+            colors = generate_node_color(node_type)
             
             # Ensure data object exists
             if "data" not in node:
@@ -374,17 +435,17 @@ def generate_reactflow_template(standalone=False, request_data=None):
             # Set nodeId
             node["data"]["nodeId"] = node.get("id")
             
-            # Set style
+            # Set style with random colors
             node["data"]["style"] = {
-                "backgroundColor": bg_color,
-                "borderColor": "gray",
-                "borderStyle": "solid",
-                "borderWidth": "2px",
-                "color": "black",
+                "backgroundColor": colors["backgroundColor"],
+                "borderColor": "#999999" if is_group else "#555555",
+                "borderStyle": "dashed" if is_group else "solid",
+                "borderWidth": "1px" if is_group else "2px",
+                "color": colors["color"],
                 "fontFamily": "Inter",
-                "fontSize": "12px" if not is_group else "16px",
+                "fontSize": "14px" if is_group else "12px",
                 "fontStyle": "normal",
-                "fontWeight": 500,
+                "fontWeight": 600 if is_group else 500,
                 "height": node["height"],
                 "textAlign": "center",
                 "textDecoration": "none",
@@ -396,11 +457,13 @@ def generate_reactflow_template(standalone=False, request_data=None):
                 node["properties"] = ["Integrity", "Confidentiality", "Authenticity", 
                                       "Authorization", "Availability", "Non-repudiation"]
             
-            # Set zIndex
+            # Set zIndex based on parent relationship
             if is_group:
                 node["zIndex"] = 0
+            elif node.get("parentId"):
+                node["zIndex"] = 1
             else:
-                node["zIndex"] = 1 if node.get("parentId") else 2
+                node["zIndex"] = 2
             
             # Set dragging flags
             node["dragging"] = False
@@ -412,8 +475,8 @@ def generate_reactflow_template(standalone=False, request_data=None):
             if "position" in node and "positionAbsolute" not in node:
                 node["positionAbsolute"] = node["position"].copy()
         
-        # Step 6: Process edges - ensure source/target exist and add styling
-        print("  🔗 Step 6: Processing edges...")
+        # Step 8: Process edges with colored strokes
+        print("  🔗 Step 8: Processing edges with colored strokes...")
         valid_node_ids = {n.get("id") for n in positioned_nodes}
         
         processed_edges = []
@@ -431,15 +494,62 @@ def generate_reactflow_template(standalone=False, request_data=None):
             if not edge_label:
                 edge_label = edge.get("name", "Connection")
             
-            full_edge = build_full_edge(source_id, target_id, edge_label)
+            # Generate random stroke color
+            stroke_color = generate_edge_stroke()
             
-            # Preserve any additional properties
+            # Build edge with custom stroke
+            full_edge = {
+                "id": f"reactflow__edge-{source_id}b-{target_id}right",
+                "source": source_id,
+                "target": target_id,
+                "sourceHandle": "b",
+                "targetHandle": "right",
+                "type": "step",
+                "animated": True,
+                "selected": False,
+                "properties": edge.get("properties", ["Integrity"]),
+                "data": {
+                    "label": edge_label,
+                    "offset": 0,
+                    "t": 0.5
+                },
+                "markerEnd": {
+                    "color": stroke_color,
+                    "height": 18,
+                    "type": "arrowclosed",
+                    "width": 18
+                },
+                "markerStart": {
+                    "color": stroke_color,
+                    "height": 18,
+                    "orient": "auto-start-reverse",
+                    "type": "arrowclosed",
+                    "width": 18
+                },
+                "style": {
+                    "end": True,
+                    "start": True,
+                    "stroke": stroke_color,
+                    "strokeDasharray": "0",
+                    "strokeWidth": 2
+                }
+            }
+            
+            # Preserve any additional properties from original edge
             if "properties" in edge:
                 full_edge["properties"] = edge["properties"]
             
             processed_edges.append(full_edge)
         
-        print(f"  ✅ Final: {len(positioned_nodes)} nodes, {len(processed_edges)} edges")
+        # Final verification
+        components_inside_groups = [n for n in positioned_nodes if n.get("type") != "group" and n.get("parentId")]
+        components_outside = [n for n in positioned_nodes if n.get("type") != "group" and not n.get("parentId")]
+        
+        print(f"\n  ✅ Final Layout Summary:")
+        print(f"     Groups: {len([n for n in positioned_nodes if n.get('type') == 'group'])}")
+        print(f"     Components inside groups: {len(components_inside_groups)}")
+        print(f"     Components outside groups: {len(components_outside)}")
+        print(f"     Edges: {len(processed_edges)}")
         print("="*60 + "\n")
 
         final_template = {
@@ -478,14 +588,14 @@ def generate_reactflow_template(standalone=False, request_data=None):
         result_model = db.Models.insert_one(model_doc)
         model_id = str(result_model.inserted_id)
 
-        db.Assets.insert_one({
+        asset_result = db.Assets.insert_one({
             "model_id": model_id,
             "template": final_template,
             "asset_name": f"{system_name}-asset",
             "asset_properties": "",
             "Details": details_from_pipeline,
         })
-
+        asset_id = str(asset_result.inserted_id)
         db.Damage_scenarios.update_one(
             {"model_id": model_id, "type": "Derived"},
             {
@@ -500,8 +610,9 @@ def generate_reactflow_template(standalone=False, request_data=None):
         )
 
         result_data = {
-            "message": "Generated successfully (with manual positioning)",
+            "message": "Generated successfully (with colored nodes and edges)",
             "model_id": model_id,
+            "asset_id": asset_id,
             "template": final_template,
             "system_name": system_name,
             "derivations": derivations_from_pipeline,
@@ -529,7 +640,8 @@ def generate_reactflow_template(standalone=False, request_data=None):
         if standalone:
             raise e
         return jsonify({"error": str(e)}), 500
-    
+
+
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""

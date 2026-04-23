@@ -200,67 +200,44 @@ def retrieve(state: RAGState):
 def architect_node(state: RAGState):
     """Deep technical discovery to build the system architecture."""
     query = state.get("user_query", "") or state.get("query", "")
-    
+
     # ⚠️ TEMPORARILY DISABLE CACHE FOR ARCHITECTURE - Force fresh generation
     # cached = load_cache(query, "architect")
-    # if cached: 
+    # if cached:
     #     print(f"  ✅ Loaded architecture from cache")
     #     return {"architecture": cached}
-    
+
     from app.v1.rag.prompt import ARCHITECT_PROMPT
-    
-    # ─── LOAD BMS REFERENCE FROM AZURE ───────────────────────────────────────
-    from app.v1.rag.azure_client import get_azure_client
-    from app.v1.rag.config import AZURE_PATHS
-    
-    bms_reference = None
-    try:
-        client = get_azure_client()
-        # Try to find bms_1.json or any BMS reference in REPORTS_DB
-        report_blobs = client.list_blobs(AZURE_PATHS["REPORTS_PATH"])
-        for blob_path in report_blobs:
-            if "bms" in blob_path.lower() and blob_path.endswith(".json"):
-                bms_reference = client.download_json(blob_path)
-                print(f"  📋 Loaded BMS reference from Azure: {blob_path}")
-                break
-    except Exception as e:
-        print(f"  ⚠️ Could not load BMS reference: {e}")
-    
-    # Build BMS reference context
-    bms_context = ""
-    if bms_reference:
-        assets = bms_reference.get("Assets", [{}])[0] if bms_reference.get("Assets") else {}
-        template = assets.get("template", {})
-        nodes = template.get("nodes", [])
-        edges = template.get("edges", [])
-        
-        bms_context = f"""
-### REFERENCE BMS ARCHITECTURE (from Azure):
-This is the EXACT structure you should follow. The BMS has:
-- {len([n for n in nodes if n.get("type") != "group"])} component nodes (excluding groups)
-- {len([n for n in nodes if n.get("type") == "group"])} group containers
-- {len(edges)} edges
+    from app.v1.rag.components import resolve_ecu, resolve_reference_report, build_ref_context
 
-Components in reference BMS:
-{json.dumps([{'id': n.get('id'), 'label': n.get('data', {}).get('label'), 'type': n.get('type')} for n in nodes if n.get('type') != 'group'], indent=2)}
+    # ─── RESOLVE ECU AND LOAD MATCHING REFERENCE FROM REPORTS_DB ─────────────
+    # resolve_ecu() identifies the system type from the query (ABS, TCU, ADAS, etc.)
+    # resolve_reference_report() then finds the best-matching JSON in REPORTS_DB
+    # by scoring every blob against search terms derived from the ECU entry and
+    # the raw query.  No ECU type is hardcoded here.
+    ecu_entry = resolve_ecu(query)
+    if ecu_entry:
+        print(f"  🔍 ECU resolved: {ecu_entry.get('name', '?')}")
+    else:
+        print("  ℹ️  No ECU match — proceeding without ECU hint.")
 
-Edges in reference BMS:
-{json.dumps([{'source': e.get('source'), 'target': e.get('target'), 'label': e.get('data', {}).get('label')} for e in edges], indent=2)}
+    reference_data = resolve_reference_report(ecu_entry, query)
 
-⚠️ YOU MUST GENERATE EXACTLY THIS STRUCTURE, NO MORE, NO LESS.
-"""
-    
-    # print(f"Architecting system (Target: {MAX_NODES} nodes, {MAX_EDGES} edges, max {MAX_GROUPS} groups)...")
-    
+    # build_ref_context() returns two strings:
+    #   ref_context      — structural skeleton from the matched REPORTS_DB JSON
+    #   ecu_hint_context — authoritative asset list from dataecu.json
+    ref_context, ecu_hint_context = build_ref_context(reference_data, ecu_entry)
+
     tmpl = jinja2.Template(ARCHITECT_PROMPT)
     prompt = tmpl.render(
-        question=state["user_query"], 
+        question=state["user_query"],
         documents=state["documents"],
         max_nodes=MAX_NODES,
         max_edges=MAX_EDGES,
-        max_groups=MAX_GROUPS, 
-        bms_context=bms_context  # Pass BMS reference to prompt
-    ) 
+        max_groups=MAX_GROUPS,
+        ref_context=ref_context,
+        ecu_hint_context=ecu_hint_context,
+    )
     
     # Save the architect prompt for debugging
     prompt_file = f"architect_prompt_{query.replace(' ', '_')}.txt"
@@ -474,6 +451,7 @@ def damage_scenario_node(state: RAGState):
     print("Assessing damage scenarios...")
     tmpl = jinja2.Template(DAMAGE_PROMPT)
     prompt = tmpl.render(
+        question=state.get("user_query", "Automotive ECU System"),
         threats=json.dumps(state["threats"], indent=2),
         architecture=json.dumps(state["architecture"], indent=2)
     )

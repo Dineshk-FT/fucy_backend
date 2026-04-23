@@ -140,6 +140,196 @@ def build_enriched_query(user_query: str, ecu_entry: Optional[dict]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# REFERENCE REPORT RESOLUTION (from REPORTS_DB in Azure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _score_blob_match(blob_fname: str, search_terms: list[str]) -> int:
+    """Score how well a blob filename matches the search terms."""
+    fname_lower = blob_fname.lower()
+    score = 0
+    for term in search_terms:
+        if term in fname_lower:
+            # Exact token match (surrounded by non-alphanumeric) scores higher
+            if re.search(r'(?<![a-z0-9])' + re.escape(term) + r'(?![a-z0-9])', fname_lower):
+                score += 3
+            else:
+                score += 1
+    return score
+
+
+def resolve_reference_report(ecu_entry: Optional[dict], user_query: str) -> Optional[dict]:
+    """
+    Find the best-matching reference JSON in REPORTS_DB for any ECU/system.
+
+    Strategy:
+    1. Build search terms from the ECU entry key, acronym, and name keywords.
+    2. Also include meaningful words from the raw user query.
+    3. Score every JSON blob in REPORTS_DB against those terms.
+    4. Return the highest-scoring match, or None if REPORTS_DB is empty.
+
+    This intentionally never hardcodes any ECU type (BMS, ABS, TCU, etc.) so
+    that the architect node stays fully generic.
+    """
+    client = get_azure_client()
+
+    try:
+        report_blobs = client.list_blobs(AZURE_PATHS["REPORTS_PATH"])
+    except Exception as e:
+        print(f"  ⚠️  Could not list REPORTS_DB blobs: {e}")
+        return None
+
+    json_blobs = [b for b in report_blobs if b.endswith(".json")]
+    if not json_blobs:
+        print("  ℹ️  No JSON files found in REPORTS_DB.")
+        return None
+
+    # ── Build search terms ────────────────────────────────────────────────
+    search_terms: list[str] = []
+
+    if ecu_entry:
+        name_raw = ecu_entry.get("name", "")
+
+        # 1. Extract leading acronym, e.g. "bms" from "BMS (Battery Management System)"
+        m = re.match(r'^([A-Za-z]+)', name_raw)
+        if m:
+            search_terms.append(m.group(1).lower())
+
+        # 2. Meaningful words from the full name
+        for word in re.findall(r'\b[a-zA-Z]{3,}\b', name_raw):
+            w = word.lower()
+            if w not in _SUFFIX_WORDS:
+                search_terms.append(w)
+
+        # 3. ECU key itself (e.g. "motor_controller" → "motor", "controller")
+        for part in re.split(r'[_\-]', ecu_entry.get("key", "")):
+            if len(part) >= 3:
+                search_terms.append(part.lower())
+
+    # 4. Meaningful words directly from the user query
+    for word in re.findall(r'\b[a-zA-Z]{3,}\b', user_query):
+        w = word.lower()
+        if w not in _SUFFIX_WORDS:
+            search_terms.append(w)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_terms: list[str] = []
+    for t in search_terms:
+        if t not in seen:
+            seen.add(t)
+            unique_terms.append(t)
+
+    print(f"  🔍 Reference report search terms: {unique_terms[:8]}")
+
+    # ── Score every blob ──────────────────────────────────────────────────
+    best_blob: Optional[str] = None
+    best_score = -1
+
+    for blob_path in json_blobs:
+        fname = blob_path.split("/")[-1]
+        score = _score_blob_match(fname, unique_terms)
+        if score > best_score:
+            best_score = score
+            best_blob = blob_path
+
+    if best_blob:
+        data = client.download_json(best_blob)
+        fname = best_blob.split("/")[-1]
+        if data:
+            print(f"  📋 Loaded reference report: {fname}  (match score: {best_score})")
+            return data
+        else:
+            print(f"  ⚠️  Could not download reference report: {fname}")
+
+    return None
+
+
+def build_ref_context(reference_data: Optional[dict], ecu_entry: Optional[dict]) -> tuple[str, str]:
+    """
+    Build (ref_context, ecu_hint_context) strings for the ARCHITECT_PROMPT.
+
+    ref_context      — structural skeleton from the matched REPORTS_DB JSON
+    ecu_hint_context — authoritative asset list from dataecu.json
+    """
+    # ── ECU hint context (from dataecu.json) ─────────────────────────────
+    ecu_hint_context = ""
+    if ecu_entry:
+        ecu_hint_context = (
+            f"\n### ECU / SYSTEM SPECIFICATION HINT (from dataecu.json):\n"
+            f"System : {ecu_entry.get('name', 'Unknown')}\n"
+            f"Type   : {ecu_entry.get('type', 'ECU')}\n"
+            f"Assets : {ecu_entry.get('hint', 'No hint available.')}\n"
+            f"\n⚠️ Generate ONLY the assets listed above. "
+            f"Do NOT invent components not mentioned in the hint.\n"
+        )
+
+    # ── Reference architecture context (from REPORTS_DB JSON) ────────────
+    ref_context = ""
+    if not reference_data:
+        return ref_context, ecu_hint_context
+
+    # Handle both output schema formats used in this project
+    assets_block: dict = {}
+    if "Assets" in reference_data:
+        assets_list = reference_data["Assets"]
+        assets_block = assets_list[0] if isinstance(assets_list, list) and assets_list else {}
+    elif "assets" in reference_data:
+        assets_block = reference_data["assets"]
+
+    template   = assets_block.get("template", {})
+    nodes      = template.get("nodes", [])
+    edges      = template.get("edges", [])
+    model_name = ""
+    if reference_data.get("Models"):
+        model_name = reference_data["Models"][0].get("name", "")
+
+    comp_nodes  = [n for n in nodes if n.get("type") != "group"]
+    group_nodes = [n for n in nodes if n.get("type") == "group"]
+
+    if not comp_nodes:
+        return ref_context, ecu_hint_context
+
+    node_summary = json.dumps(
+        [
+            {
+                "id":    n.get("id"),
+                "label": n.get("data", {}).get("label", n.get("id")),
+                "type":  n.get("type", "default"),
+            }
+            for n in comp_nodes
+        ],
+        indent=2,
+    )
+
+    edge_summary = json.dumps(
+        [
+            {
+                "source": e.get("source"),
+                "target": e.get("target"),
+                "label":  e.get("data", {}).get("label", e.get("label", "")),
+            }
+            for e in edges
+        ],
+        indent=2,
+    )
+
+    ref_context = (
+        f"\n### REFERENCE ARCHITECTURE"
+        + (f" — {model_name}" if model_name else "")
+        + f" (from REPORTS_DB):\n"
+        f"This is a real system of similar type. Use it as a structural template.\n"
+        f"Reference has {len(comp_nodes)} component nodes, "
+        f"{len(group_nodes)} groups, {len(edges)} edges.\n\n"
+        f"Reference components:\n{node_summary}\n\n"
+        f"Reference edges:\n{edge_summary}\n\n"
+        f"⚠️ ADAPT this structure to the TARGET SYSTEM below. "
+        f"Rename and adjust nodes to match the actual system — do not copy verbatim.\n"
+    )
+
+    return ref_context, ecu_hint_context
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST-PROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
 
