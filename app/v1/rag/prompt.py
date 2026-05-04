@@ -76,9 +76,56 @@ listed there. Do NOT invent components that are not mentioned in the hint.
 {% endif %}
 
 {% if ref_context %}
-⚠️ The REFERENCE ARCHITECTURE above shows a real system of the same type.
-Use its node/edge count and connectivity patterns as your structural template,
-but rename and adapt all nodes to match the TARGET SYSTEM exactly.
+⚠️ REFERENCE ARCHITECTURE — STRICT STRUCTURAL COPY RULES:
+The REFERENCE ARCHITECTURE above is the canonical source of truth for this system's
+structure. You MUST follow ALL of the rules below without exception:
+
+1. **COPY ALL EDGES VERBATIM** — Every edge that exists in the reference architecture
+   MUST appear in your output. Do NOT drop, merge, or skip any edge.
+   - Map source/target IDs from the reference to the corresponding IDs in your output.
+   - If the reference has 20 edges, your output must have 20 edges (= {{ max_edges }}).
+   - Verify edge-by-edge before outputting. A missing edge is a hard failure.
+
+2. **COPY NODE GEOMETRY VERBATIM** — For every node from the reference, preserve its
+   exact layout values:
+   - `position` → copy { x, y } exactly as given in the reference
+   - `width`    → copy the numeric value exactly as given
+   - `height`   → copy the numeric value exactly as given
+   Do NOT recalculate, estimate, or omit any of these fields.
+
+3. **COPY NODE TYPE & DATA VERBATIM** — For every node:
+   - `type`     → copy exactly ("default", "data", "group", etc.)
+   - `data`     → copy the entire data object (label, style, etc.) and then
+                  rename only the `label` field to match the TARGET SYSTEM component.
+   - `parentId` → preserve the parent-child grouping from the reference.
+
+4. **RENAME ONLY LABELS AND IDs** — The only changes you are allowed to make are:
+   - Replace the `id` string with a new short, stable, lowercase, hyphenated ID
+     derived from the TARGET SYSTEM name (e.g. `bms-mcu` for the BMS MCU).
+   - Replace the `data.label` string with the corresponding TARGET SYSTEM component name.
+   - Update edge `source` / `target` to use the renamed IDs.
+   Everything else (geometry, style, type) must be an exact copy.
+
+5. **EDGE PRESERVATION CHECKLIST** — Before outputting, verify:
+   □ I have counted every edge in the reference architecture.
+   □ My output contains exactly that many edges ({{ max_edges }}).
+   □ Every source and target ID in my edges resolves to a node in my output.
+   □ I have NOT dropped any edge that is in the reference.
+
+6. **COPY NODE PROPERTIES VERBATIM** — For every component node (type "default" or "data"):
+   - `properties` → copy the EXACT properties array from the corresponding reference node
+   - Do NOT add, remove, or change any properties
+   - If the reference node has ["Integrity", "Availability"], output EXACTLY ["Integrity", "Availability"]
+   - If the reference node has all 6 properties, output all 6
+   - If the reference node has an empty array [], output []
+   - This is CRITICAL for correct security analysis — mismatched properties will cause failures
+
+7. **COPY EDGE PROPERTIES VERBATIM** — For every edge:
+   - `properties` → copy the EXACT properties array from the corresponding reference edge
+   - Do NOT add, remove, or change any edge properties
+   - If a reference edge has ["Confidentiality"], output EXACTLY ["Confidentiality"]
+   - If a reference edge has ["Integrity", "Authenticity"], output EXACTLY those
+
 {% endif %}
 
 ### ARCHITECTURE RULES:
@@ -97,6 +144,7 @@ but rename and adapt all nodes to match the TARGET SYSTEM exactly.
    - Power/analog group (power supply, sensors, ADCs)
    - External interfaces group (debug port, OBD, V2X, cloud)
    DO NOT create more than {{ max_groups }} group nodes.
+   Groups should have an empty properties array: `"properties": []`
 
 3. **NODE IDs** — Use short, stable, lowercase, hyphenated strings derived from
    the system name. Examples for an ABS ECU: `abs-mcu`, `abs-can`, `abs-flashmem`.
@@ -107,14 +155,54 @@ but rename and adapt all nodes to match the TARGET SYSTEM exactly.
    - source: valid node ID from your component list
    - target: valid node ID from your component list
    - label: short protocol name (CAN, SPI, I2C, UART, ADC, IO_PINS, Ethernet, etc.)
+   - properties: copy from reference edge, or use ["Integrity"] if no reference
    Every component should have at least one connection.
 
-5. **DETAILS — one entry per component node:**
+5. **NODE GEOMETRY — REQUIRED FIELDS FOR EVERY NODE:**
+   Every node (group, default, and data) MUST include ALL of the following fields:
+   - `position`: { "x": <number>, "y": <number> }
+   - `width`:    <number>   (pixel width of the node)
+   - `height`:   <number>   (pixel height of the node)
+   These values must come from the reference architecture when one is provided.
+   If no reference is provided, choose sensible layout values (see examples below).
+
+6. **NODE PROPERTIES — REQUIRED FIELD FOR EVERY COMPONENT NODE:**
+   {% if ref_context %}
+   ⚠️ COPY PROPERTIES FROM REFERENCE: For each component node, copy the exact `properties` 
+   array from the matching reference node. Do NOT change, add, or remove any properties.
+   {% else %}
+   Every component node (type "default" or "data") MUST include a `"properties"` array
+   listing ALL cybersecurity properties relevant to that component. Choose from:
+   "Integrity", "Confidentiality", "Authenticity", "Authorization", "Availability", "Non-repudiation"
+   
+   ⚠️ CRITICAL: Include ALL 6 properties for critical components like BatteryPack, 
+   Code Flash, and main ECU components. Only exclude properties that are truly not applicable.
+   {% endif %}
+   
+   Example for a critical component:
+   {
+     "id": "bms-batterypack",
+     "type": "default",
+     "properties": ["Integrity", "Confidentiality", "Authenticity", "Authorization", "Availability", "Non-repudiation"],
+     ...
+   }
+   
+   Example for a simple component:
+   {
+     "id": "bms-can-transceiver",
+     "type": "default",
+     "properties": ["Integrity", "Availability"],
+     ...
+   }
+   
+   These must match the securityProperties listed in the Details array for the same node.
+
+7. **DETAILS — one entry per component node:**
    Each Detail entry maps a component to its security-relevant properties
    (CIA triad, STRIDE threats, asset sensitivity). Use the nodeId of the
    component it describes.
 
-6. **VERIFICATION CHECKLIST (complete before output):**
+8. **VERIFICATION CHECKLIST (complete before output):**
    □ I have exactly {{ max_nodes }} component nodes (type "default" or "data")
    □ I have exactly {{ max_edges }} edges
    □ I have {{ max_groups }} or fewer group containers
@@ -122,6 +210,14 @@ but rename and adapt all nodes to match the TARGET SYSTEM exactly.
    □ Groups do NOT count toward the {{ max_nodes }} limit
    □ No duplicate node IDs
    □ All components are specific to "{{ question }}" (no generic placeholders)
+   □ Every node has position, width, height fields
+   {% if ref_context %}
+   □ Every component node's properties EXACTLY match the reference node's properties
+   □ Every edge's properties EXACTLY match the reference edge's properties
+   {% else %}
+   □ Every component node has a "properties" array with relevant cybersecurity properties
+   {% endif %}
+   □ No edges from the reference architecture have been dropped
 
 ### OUTPUT FORMAT:
 Return ONLY a valid JSON object. No markdown fences. No commentary.
@@ -143,15 +239,45 @@ Return ONLY a valid JSON object. No markdown fences. No commentary.
           }
         },
         "position": {"x": 0, "y": 0},
-        "height": 600,
         "width": 1000,
-        "zIndex": 0
-      }
+        "height": 600,
+        "properties": []
+      },
       // Add up to {{ max_groups - 1 }} more group containers here (total ≤ {{ max_groups }})
-      // Add your {{ max_nodes }} component nodes here ...
+      {
+        "id": "<system-prefix>-component-node",
+        "type": "default",
+        "parentId": "<system-prefix>-main-group",
+        "data": {
+          "label": "<Component Label>",
+          "style": {
+            "background": "#ffffff",
+            "border": "1px solid #999",
+            "borderRadius": "4px",
+            "fontSize": "12px"
+          }
+        },
+        "position": {"x": 120, "y": 80},
+        "width": 160,
+        "height": 40,
+        {% if ref_context %}
+        "properties": ["Integrity", "Availability"]
+        {% else %}
+        "properties": ["Integrity", "Confidentiality"]
+        {% endif %}
+      }
+      // Add remaining {{ max_nodes }} component nodes here with position/width/height AND properties ...
     ],
     "edges": [
-      // Add exactly {{ max_edges }} edges here ...
+      {
+        "id": "e-<source>-<target>",
+        "source": "<source-node-id>",
+        "target": "<target-node-id>",
+        "label": "<Protocol>",
+        "type": "default",
+        "properties": ["Integrity"]
+      }
+      // Add exactly {{ max_edges }} edges here — ALL edges from the reference must be present
     ]
   },
   "Details": [
@@ -159,7 +285,6 @@ Return ONLY a valid JSON object. No markdown fences. No commentary.
   ]
 }
 """
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. THREAT ANALYST AGENT
