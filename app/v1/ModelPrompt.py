@@ -64,51 +64,6 @@ def debug_env():
         "all_env_vars": {k: v for k, v in os.environ.items() if "KEY" in k or "API" in k}
     })
 
-# @modelprompt.route("/test-gemini", methods=["GET"])
-# def test_gemini():
-#     """Test if Gemini API key is working"""
-#     try:
-#         response = gemini_client.generate_content("Say 'API key works!'")
-#         content = gemini_client.get_text(response)
-#         return jsonify({"success": True, "response": content})
-#     except Exception as e:
-#         return jsonify({"success": False, "error": str(e)}), 500
-
-# @modelprompt.route("/debug/key-info", methods=["GET"])
-# def debug_key_info():
-#     """Get information about the API key being used"""
-#     try:
-#         # Try to get the project ID from the API response
-#         response = gemini_client.generate_content("Tell me what project this API key belongs to")
-#         content = gemini_client.get_text(response)
-#         return jsonify({
-#             "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:15] + "...",
-#             "project_guess": content[:200] if content else "Unknown",
-#             "full_response": content
-#         })
-#     except Exception as e:
-#         error_msg = str(e)
-#         # Extract project ID from error if present
-#         import re
-#         project_match = re.search(r'projects/(\d+)', error_msg)
-#         return jsonify({
-#             "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:15] + "...",
-#             "error": error_msg[:500],
-#             "project_id_from_error": project_match.group(1) if project_match else "Not found"
-#         })
-
-
-# @modelprompt.route("/debug/status", methods=["GET"])
-# def debug_status():
-#     """Check current configuration"""
-#     return jsonify({
-#         "api_key_loaded": bool(os.getenv("GOOGLE_API_KEY")),
-#         "api_key_preview": os.getenv("GOOGLE_API_KEY", "")[:10] + "..." if os.getenv("GOOGLE_API_KEY") else "Not set",
-#         "gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-#         "max_nodes_in_pipeline": 20,  # Should match pipeline.py
-#         "status": "Ready" if os.getenv("GOOGLE_API_KEY") else "Missing API Key"
-#     })
-
 #1- Prompt template for label creation (inputs for the model)
 def build_prompt(system_name, user_prompt=None):
     # --- Default Instructions ---
@@ -168,7 +123,6 @@ def get_system_inputs():
 
 
 #2- Item definition prompt (COMPACT VERSION - Architecture Only)
-
 @modelprompt.route("/v1/generate/model", methods=["POST"])
 def generate_reactflow_template(standalone=False, request_data=None):
     """Generate ReactFlow template - with manual positioning, group handling, and property preservation from JSON."""
@@ -214,11 +168,9 @@ def generate_reactflow_template(standalone=False, request_data=None):
         from app.v1.rag.ingest import load_all_documents
         from app.v1.rag.pipeline import build_graph
         from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
+        
+        # We don't need the generic position calculators anymore, keeping only what's needed
         from app.Methods.new_helpers import (
-            calculate_node_positions,
-            recalculate_group_heights_from_children,
-            position_ungrouped_nodes,
-            adjust_group_sizes,
             build_basic_node,
             build_full_edge,
             generate_node_color,
@@ -309,7 +261,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             pn_id = pn.get("id", "")
             pn_props = pn.get("properties", None)
             if pn_id and pn_props and isinstance(pn_props, list) and len(pn_props) > 0:
-                # Clean the properties - ensure they're all strings
                 clean_props = []
                 for p in pn_props:
                     if isinstance(p, dict):
@@ -319,9 +270,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
                     else:
                         clean_props.append(str(p))
                 pipeline_properties_map[pn_id] = clean_props
-                print(f"    📋 Pipeline ID '{pn_id}' has properties: {clean_props}")
 
-        # Also build a label-based lookup for fallback
         pipeline_label_properties_map = {}
         for pn in full_pipeline_nodes:
             pn_label = pn.get("data", {}).get("label", "")
@@ -341,13 +290,9 @@ def generate_reactflow_template(standalone=False, request_data=None):
         group_nodes = [n for n in minimal_nodes if n.get("type") == "group"]
         component_nodes = [n for n in minimal_nodes if n.get("type") != "group"]
 
-        # Limit number of groups
         group_nodes = group_nodes[:MAX_GROUPS]
-        
-        # Limit number of component nodes
         component_nodes = component_nodes[:MAX_NODES]
         
-        # Ensure all nodes have required fields
         for node in component_nodes:
             if "data" not in node:
                 node["data"] = {}
@@ -358,15 +303,12 @@ def generate_reactflow_template(standalone=False, request_data=None):
             if "type" not in node:
                 node["type"] = "default"
             
-            # ── PULL PROPERTIES FROM ORIGINAL JSON ──
             node_id = node.get("id", "")
             node_label = node.get("data", {}).get("label", "")
             
-            # First check if the node already has properties
             existing_props = node.get("properties", None)
             
             if existing_props and isinstance(existing_props, list) and len(existing_props) > 0:
-                # Properties already exist on the node, clean them
                 clean_existing = []
                 for p in existing_props:
                     if isinstance(p, dict):
@@ -376,24 +318,16 @@ def generate_reactflow_template(standalone=False, request_data=None):
                     else:
                         clean_existing.append(str(p))
                 node["properties"] = clean_existing
-                print(f"    ✅ Node '{node_label}' has properties from template: {clean_existing}")
             else:
-                # Try to get properties from the full pipeline JSON by ID
                 pipeline_props = pipeline_properties_map.get(node_id, None)
-                
                 if pipeline_props:
                     node["properties"] = pipeline_props
-                    print(f"    ✅ Pulled properties for '{node_label}' by ID: {pipeline_props}")
                 else:
-                    # Try label-based lookup
                     pipeline_props = pipeline_label_properties_map.get(node_label, None)
                     if pipeline_props:
                         node["properties"] = pipeline_props
-                        print(f"    ✅ Pulled properties for '{node_label}' by label: {pipeline_props}")
                     else:
-                        # Mark as missing - will set defaults later
                         node["_properties_missing"] = True
-                        print(f"    ⚠️ No properties found for '{node_label}'")
         
         for node in group_nodes:
             if "data" not in node:
@@ -434,14 +368,11 @@ def generate_reactflow_template(standalone=False, request_data=None):
             if src and tgt and pe_props:
                 pipeline_edge_st_props_map[f"{src}->{tgt}"] = pe_props
 
-        print(f"AFTER TRIM → Nodes: {len(final_nodes)}, Edges: {len(final_edges)}")
-
-        # ── MANUAL POSITIONING AND GROUP HANDLING ───────────────────────────
+        # ── B40-STYLE MANUAL POSITIONING AND GROUP HANDLING ─────────────────
         print("\n" + "="*60)
-        print("APPLYING MANUAL POSITIONING AND GROUP HANDLING")
+        print("APPLYING B40-STYLE GRID POSITIONING")
         print("="*60)
         
-        # Step 1: Ensure parent-child relationships are preserved
         print("  🔗 Step 1: Building parent-child relationships...")
         group_ids = {n.get("id") for n in final_nodes if n.get("type") == "group"}
         
@@ -457,52 +388,83 @@ def generate_reactflow_template(standalone=False, request_data=None):
                         group_label = group.get("data", {}).get("label", "").lower()
                         if group_label and (group_label in node_label or node_label in group_label):
                             node["parentId"] = group.get("id")
-                            print(f"    Assigned {node.get('id')} to group {group.get('id')}")
                             break
+
+        print("  📍 Step 2-6: Applying rigid B40-style grid coordinates...")
+        positioned_nodes = final_nodes
+        groups = [n for n in positioned_nodes if n.get("type") == "group"]
+        components = [n for n in positioned_nodes if n.get("type") != "group"]
         
-        # Step 2: Calculate positions with proper group containment
-        print("  📍 Step 2: Calculating positions with group containment...")
-        positioned_nodes = calculate_node_positions(final_nodes, final_edges)
+        # Un-nest groups to enforce absolute horizontal layout
+        for g in groups:
+            g["parentId"] = None
+            
+        current_group_x = -96
+        group_y = -44
+        group_positions = {}
         
-        # Step 3: Verify all children are inside their parent groups
-        print("  🔍 Step 3: Verifying children are inside parent groups...")
-        group_map = {n.get("id"): n for n in positioned_nodes if n.get("type") == "group"}
+        for g in groups:
+            children = [n for n in components if n.get("parentId") == g.get("id")]
+            num_children = len(children)
+            cols = min(num_children, 3) if num_children > 0 else 1
+            rows = (num_children - 1) // 3 + 1 if num_children > 0 else 1
+            
+            # Replicate B40 spacing layout
+            g_width = max(740, 60 + cols * 210 + 50)
+            g_height = max(320, 60 + rows * 120 + 60)
+            
+            g["position"] = {"x": current_group_x, "y": group_y}
+            g["positionAbsolute"] = {"x": current_group_x, "y": group_y}
+            g["width"] = g_width
+            g["height"] = g_height
+            if "style" not in g:
+                g["style"] = {}
+            g["style"]["width"] = g_width
+            g["style"]["height"] = g_height
+            
+            group_positions[g.get("id")] = {"x": current_group_x, "y": group_y}
+            current_group_x += g_width + 160
+
+        child_counters = {}
+        ungrouped_counter = 0
         
-        for node in positioned_nodes:
-            if node.get("type") != "group" and node.get("parentId"):
-                parent = group_map.get(node["parentId"])
-                if parent:
-                    parent_x = parent.get("position", {}).get("x", 0)
-                    parent_y = parent.get("position", {}).get("y", 0)
-                    parent_w = parent.get("width", 800)
-                    parent_h = parent.get("height", 500)
-                    
-                    node_x = node.get("position", {}).get("x", 0)
-                    node_y = node.get("position", {}).get("y", 0)
-                    node_w = node.get("width", 150)
-                    node_h = node.get("height", 60)
-                    
-                    if (node_x < parent_x or node_x + node_w > parent_x + parent_w or
-                        node_y < parent_y or node_y + node_h > parent_y + parent_h):
-                        print(f"    ⚠️ Node {node.get('id')} is outside its parent group! Repositioning...")
-                        padding = 30
-                        rel_x = padding + ((node_x - parent_x) % (parent_w - node_w - 2*padding)) if parent_w > node_w + 2*padding else padding
-                        rel_y = padding + ((node_y - parent_y) % (parent_h - node_h - 2*padding)) if parent_h > node_h + 2*padding else padding
-                        node["position"] = {"x": parent_x + rel_x, "y": parent_y + rel_y}
-                        node["positionAbsolute"] = node["position"].copy()
-                        print(f"    Repositioned to {node['position']}")
-        
-        # Step 4: Adjust group sizes based on children
-        print("  📦 Step 4: Adjusting group sizes based on children...")
-        positioned_nodes = recalculate_group_heights_from_children(positioned_nodes)
-        
-        # Step 5: Position any remaining ungrouped nodes
-        print("  🔧 Step 5: Positioning ungrouped nodes...")
-        positioned_nodes = position_ungrouped_nodes(positioned_nodes, final_edges)
-        
-        # Step 6: Final pass to adjust group sizes again
-        print("  📐 Step 6: Final group size adjustment...")
-        positioned_nodes = adjust_group_sizes(positioned_nodes)
+        for n in components:
+            # Force exact B40 dimension sizing
+            n["width"] = 160
+            n["height"] = 40
+            if "style" not in n:
+                n["style"] = {}
+            n["style"]["width"] = 160
+            n["style"]["height"] = 40
+            
+            pid = n.get("parentId")
+            if pid and pid in group_positions:
+                ci = child_counters.get(pid, 0)
+                col = ci % 3
+                row = ci // 3
+                
+                rel_x = 60 + (col * 210)
+                rel_y = 60 + (row * 120)
+                
+                n["relative_x"] = rel_x
+                n["relative_y"] = rel_y
+                n["position"] = {
+                    "x": group_positions[pid]["x"] + rel_x,
+                    "y": group_positions[pid]["y"] + rel_y
+                }
+                n["positionAbsolute"] = n["position"].copy()
+                n["zIndex"] = 1
+                child_counters[pid] = ci + 1
+            else:
+                col = ungrouped_counter % 3
+                row = ungrouped_counter // 3
+                n["position"] = {
+                    "x": 100 + (col * 400),
+                    "y": 806 + (row * 120)
+                }
+                n["positionAbsolute"] = n["position"].copy()
+                n["zIndex"] = 2
+                ungrouped_counter += 1
         
         # Step 7: Apply styling and SET FINAL PROPERTIES
         print("  🎨 Step 7: Applying styling and setting properties...")
@@ -518,30 +480,24 @@ def generate_reactflow_template(standalone=False, request_data=None):
             node_type = node.get("type", "default")
             is_group = node_type == "group"
             
-            # Set default dimensions if missing
+            # Explicitly clear bad properties to apply uniform 160x40 layout
             if is_group:
                 if "width" not in node:
                     node["width"] = 800
                 if "height" not in node:
                     node["height"] = 500
             else:
-                if "width" not in node:
-                    node["width"] = 150
-                if "height" not in node:
-                    node["height"] = 60
+                node["width"] = 160
+                node["height"] = 40
             
-            # Generate random colors
             colors = generate_node_color(node_type)
             
-            # Ensure data object exists
             if "data" not in node:
                 node["data"] = {}
             
-            # Set label if missing
             if "label" not in node["data"]:
                 node["data"]["label"] = node.get("id", "Node")
             
-            # Set nodeId
             node["data"]["nodeId"] = node.get("id")
             
             # ── FINAL PROPERTIES RESOLUTION ──
@@ -551,15 +507,10 @@ def generate_reactflow_template(standalone=False, request_data=None):
             
             if is_group:
                 final_properties = DEFAULT_GROUP_PROPERTIES
-                print(f"    📦 Group '{node_label}': {final_properties}")
             elif raw_properties is not None and isinstance(raw_properties, list):
-                # ✅ FIX: Explicitly check for len == 0 and preserve the empty list
                 if len(raw_properties) == 0:
                     final_properties = []
-                    source = "pipeline" if not was_missing else "pipeline (late binding)"
-                    print(f"    ✅ Component '{node_label}' [{source}] preserved empty properties: {final_properties}")
                 else:
-                    # Clean up the properties - preserve exactly what came from pipeline
                     clean_props = []
                     for p in raw_properties:
                         if isinstance(p, dict):
@@ -570,7 +521,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
                         else:
                             clean_props.append(str(p))
                     
-                    # Remove duplicates while preserving order
                     seen = set()
                     unique_props = []
                     for p in clean_props:
@@ -578,25 +528,17 @@ def generate_reactflow_template(standalone=False, request_data=None):
                             seen.add(p)
                             unique_props.append(p)
                     
-                    # Filter to only valid cybersecurity properties
                     filtered_props = [p for p in unique_props if p in VALID_CYBER_PROPS]
                     
                     if filtered_props:
                         final_properties = filtered_props
-                        source = "pipeline" if not was_missing else "pipeline (late binding)"
-                        print(f"    ✅ Component '{node_label}' [{source}]: {final_properties}")
                     else:
-                        # Empty or invalid - use defaults only for components
                         final_properties = DEFAULT_COMPONENT_PROPERTIES
-                        print(f"    ⚠️ Component '{node_label}' has no valid props, using defaults: {final_properties}")
             else:
-                # Properties was None (truly missing)
                 final_properties = DEFAULT_COMPONENT_PROPERTIES
-                print(f"    ⚠️ Component '{node_label}' has NO props (None), using defaults: {final_properties}")
             
             node["properties"] = final_properties
             
-            # Set style with random colors
             node["data"]["style"] = {
                 "backgroundColor": colors["backgroundColor"],
                 "borderColor": "#999999" if is_group else "#555555",
@@ -638,7 +580,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             target_id = edge.get("target")
             
             if source_id not in valid_node_ids or target_id not in valid_node_ids:
-                print(f"    ⚠️ Skipping edge {source_id} → {target_id} (node not found)")
                 continue
             
             edge_label = edge.get("label", edge.get("data", {}).get("label", ""))
@@ -648,7 +589,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             edge_id = edge.get("id", "")
             edge_key = f"{source_id}->{target_id}"
             
-            # Pull edge properties
             edge_props = None
             
             if edge_id and edge_id in pipeline_edge_properties_map:
@@ -658,7 +598,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             elif "properties" in edge and edge["properties"] is not None:
                 edge_props = edge.get("properties")
             
-            # ✅ FIX: Explicitly preserve explicitly empty edge lists
             if edge_props is not None and isinstance(edge_props, list):
                 if len(edge_props) == 0:
                     final_edge_props = []
@@ -716,23 +655,6 @@ def generate_reactflow_template(standalone=False, request_data=None):
             
             processed_edges.append(full_edge)
         
-        # Final verification
-        components_inside_groups = [n for n in positioned_nodes if n.get("type") != "group" and n.get("parentId")]
-        components_outside = [n for n in positioned_nodes if n.get("type") != "group" and not n.get("parentId")]
-        
-        print(f"\n  ✅ Final Layout Summary:")
-        print(f"     Groups: {len([n for n in positioned_nodes if n.get('type') == 'group'])}")
-        print(f"     Components inside groups: {len(components_inside_groups)}")
-        print(f"     Components outside groups: {len(components_outside)}")
-        print(f"     Edges: {len(processed_edges)}")
-        
-        print(f"\n  📋 Final Properties:")
-        for node in positioned_nodes:
-            node_label = node.get("data", {}).get("label", node.get("id"))
-            node_props = node.get("properties", [])
-            print(f"     • {node_label}: {node_props}")
-        print("="*60 + "\n")
-
         final_template = {
             "nodes": positioned_nodes,
             "edges": processed_edges,
@@ -822,6 +744,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             raise e
         return jsonify({"error": str(e)}), 500
 
+
 #3 - Damage scenario creation
 def generate_object_id():
     """Generate MongoDB-style ObjectId"""
@@ -830,482 +753,348 @@ def generate_object_id():
 # Wrapper Flask endpoint
 @modelprompt.route('/v1/generate/damage-scenarios', methods=['POST'])
 def create_damage_scenarios_with_rag(standalone=False, request_data=None):
-    """Generate damage scenarios using RAG-enhanced prompts - stores as User-defined type only"""
+    """Generate damage scenarios using RAG-enhanced prompts while preserving existing reference assets."""
     try:
-        # Match item definition's request handling exactly
         if not request_data:
             request_data = request
 
-        # Parse request like item definition
+        # Parse request data
         if request.is_json:
             data = request.get_json()
             model_id = data.get("modelId")
             system_name = data.get("systemName", "")
             template_raw = data.get("template", "{}")
             user_prompt = data.get("damageScenarioPrompt", "")
-            custom_prompt = data.get("itemDefinitionPrompt", "")
-            
-            # Handle dynamic fields
-            static_fields = {"modelId", "systemName", "template", "damageScenarioPrompt", "itemDefinitionPrompt"}
-            dynamic_fields = {k: v for k, v in data.items() if k not in static_fields}
         else:
-            # Handle form data
             model_id = request_data.form.get("modelId")
             system_name = request_data.form.get("systemName", "")
             template_raw = request_data.form.get("template", "{}")
             user_prompt = request_data.form.get("damageScenarioPrompt", "")
-            custom_prompt = request_data.form.get("itemDefinitionPrompt", "")
-            
-            # Handle dynamic fields
-            static_fields = {"modelId", "systemName", "template", "damageScenarioPrompt", "itemDefinitionPrompt"}
-            dynamic_fields = {
-                key: request_data.form.get(key)
-                for key in request_data.form
-                if key not in static_fields
-            }
-
-        # Build dynamic prompt lines
-        dynamic_prompt_lines = "\n".join([
-            f"{key.replace('_', ' ').title()}: {value}"
-            for key, value in dynamic_fields.items()
-        ])
 
         if not model_id:
-            if standalone:
-                raise ValueError("modelId is required")
             return jsonify({"error": "modelId is required"}), 400
 
-        # Parse template safely
         try:
             template = json.loads(template_raw) if template_raw else {}
-        except json.JSONDecodeError as e:
-            return jsonify({"error": "Invalid template JSON", "details": str(e)}), 400
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid template JSON"}), 400
 
-        print(f"DEBUG: model_id = {model_id}")
-        print(f"DEBUG: system_name = {system_name}")
-        print(f"DEBUG: template nodes = {len(template.get('nodes', []))}")
+        # --- STEP 1: Build a comprehensive map of ALL valid assets (Nodes AND Edges) ---
+        # This is the key fix to ensure CAN1/CAN2 edges are pulled.
+        valid_assets = {}
+        
+        # Map Component Nodes
+        for node in template.get("nodes", []):
+            if node.get("type") != "group":
+                label = node.get("data", {}).get("label", "").lower().strip()
+                valid_assets[label] = node.get("id")
 
-        # ✅ FIX: Fetch reference data and FORCE bms_1.json explicitly first
+        # Map Edges (Crucial for communication-based damage scenes)
+        for edge in template.get("edges", []):
+            label = edge.get("data", {}).get("label", "").lower().strip()
+            if label:
+                valid_assets[label] = edge.get("id")
+        
+        # --- STEP 2: Enhanced matching function ---
+        def _match_asset(asset_name: str):
+            if not asset_name:
+                return None, None
+            al = asset_name.lower().strip()
+            # Exact match
+            if al in valid_assets:
+                return valid_assets[al], al
+            # Substring match (e.g., "CAN1" matching a specific edge label)
+            for label, aid in valid_assets.items():
+                if al in label or label in al:
+                    return aid, label
+            return None, None
+
+        # --- STEP 3: Pull reference data and remap ---
         from app.v1.rag.components import resolve_ecu, resolve_reference_report
         from app.v1.rag.azure_client import get_azure_client
         from app.v1.rag.config import AZURE_PATHS
-        
+        import copy
+
         client = get_azure_client()
         reference_data = None
         
-        # 1. First explicitly try to pull bms_1.json from REPORTS_DB
+        # Attempt to pull the authoritative bms_1.json
         try:
             reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip('/')
             bms_1_blob = f"{reports_path}/bms_1.json"
-            print(f"  🔍 Attempting to explicitly pull reference: {bms_1_blob}")
-            bms_1_data = client.download_json(bms_1_blob)
-            
-            if bms_1_data:
-                reference_data = bms_1_data
-                print("  ✅ Successfully pulled existing damage scenes from bms_1.json")
+            reference_data = client.download_json(bms_1_blob)
         except Exception as e:
-            print(f"  ⚠️ Could not pull bms_1.json explicitly: {e}")
+            print(f"⚠️ Falling back from bms_1.json: {e}")
 
-        # 2. Fallback: if bms_1.json isn't found, do the standard fuzzy match
         if not reference_data:
             ecu_entry = resolve_ecu(system_name)
             reference_data = resolve_reference_report(ecu_entry, system_name)
-        
-        valid_node_labels = {node.get("data", {}).get("label", "").lower().strip(): node.get("id") 
-                            for node in template.get("nodes", []) if node.get("type") != "group"}
-
-        # Fallback: first available non-group node
-        _fallback_label = next(iter(valid_node_labels), None)
-        _fallback_id    = valid_node_labels.get(_fallback_label) if _fallback_label else None
-
-        def _match_node(node_name: str):
-            """Exact → substring → word-overlap matching against current architecture."""
-            if not node_name:
-                return None, None
-            nl = node_name.lower().strip()
-            if nl in valid_node_labels:
-                return valid_node_labels[nl], nl
-            for label, nid in valid_node_labels.items():
-                if nl in label or label in nl:
-                    return nid, label
-            # Word-level overlap
-            nw = set(nl.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
-            best_score, best = 0, None
-            for label, nid in valid_node_labels.items():
-                lw = set(label.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
-                score = len(nw & lw)
-                if score > best_score:
-                    best_score, best = score, (nid, label)
-            if best and best_score > 0:
-                return best
-            return None, None
 
         existing_scenarios = []
         if reference_data and "Damage_scenarios" in reference_data:
             for ds_block in reference_data["Damage_scenarios"]:
                 scenarios_to_process = []
-                # Handle varying JSON schema structures gracefully
                 if ds_block.get("type") == "User-defined":
                     scenarios_to_process = ds_block.get("Details", [])
-                elif "Name" in ds_block and "cyberLosses" in ds_block:
-                    scenarios_to_process = [ds_block]
-
+                
                 for detail in scenarios_to_process:
-                    detail_copy = json.loads(json.dumps(detail))
+                    detail_copy = copy.deepcopy(detail)
                     remapped_losses = []
-
                     for loss in detail_copy.get("cyberLosses", []):
-                        node_name = loss.get("node", "")
-                        matched_nid, matched_label = _match_node(node_name)
-
-                        if matched_nid:
-                            loss["nodeId"] = matched_nid
-                            loss["node"]   = matched_label
-                        elif _fallback_id:
-                            # Fallback — never silently drop a loss
-                            loss["nodeId"] = _fallback_id
-                            loss["node"]   = _fallback_label
-                            print(f"  ⚠️  No match for '{node_name}' — assigned to fallback '{_fallback_label}'")
-
-                        loss["id"] = str(uuid.uuid4())
-                        remapped_losses.append(loss)
-
-                    # KEY FIX: ALWAYS include every reference scenario
+                        asset_name = loss.get("node", "")
+                        matched_id, matched_label = _match_asset(asset_name)
+                        if matched_id:
+                            loss["nodeId"] = matched_id
+                            loss["node"] = matched_label
+                            loss["id"] = str(uuid.uuid4())
+                            remapped_losses.append(loss)
+                    
                     if remapped_losses:
                         detail_copy["cyberLosses"] = remapped_losses
-                    detail_copy["_id"] = str(uuid.uuid4())
-                    existing_scenarios.append(detail_copy)
+                        detail_copy["_id"] = str(uuid.uuid4())
+                        existing_scenarios.append(detail_copy)
 
-        print(f"✅ Found {len(existing_scenarios)} valid existing damage scenarios from reference.")
-
-        # ── Build User-defined Damage Scenarios using the prompt ──
-        
+        # --- STEP 4: Generate extras via Gemini/RAG ---
         from app.v1.rag.prompt import DAMAGE_PROMPT
         import jinja2
-        
-        # Render the DAMAGE_PROMPT template
+        from app.v1.rag.pipeline import setup as pipeline_setup
+        from app.v1.rag.ingest import load_all_documents
+
         tmpl = jinja2.Template(DAMAGE_PROMPT)
-        base_prompt = tmpl.render(
+        final_prompt = tmpl.render(
+            question=system_name,
             architecture=json.dumps({"template": template}, indent=2)
         )
         
-        # Add user/custom prompts
-        additional_instructions = ""
-        
-        if user_prompt:
-            additional_instructions += f"\n\n### ADDITIONAL USER REQUIREMENTS:\n{user_prompt}\n"
-        
-        if custom_prompt:
-            additional_instructions += f"\n\n### CUSTOM REQUIREMENTS:\n{custom_prompt}\n"
-        
-        if dynamic_prompt_lines:
-            additional_instructions += f"\n\n### ADDITIONAL SYSTEM DETAILS:\n{dynamic_prompt_lines}\n"
-            
-        # ✅ FIX: Provide existing scenarios to Gemini so it only generates extras
+        # Inject existing scenarios to prevent duplicates[cite: 5]
         if existing_scenarios:
-            additional_instructions += f"\n\n### EXISTING SCENARIOS (DO NOT REGENERATE THESE):\n{json.dumps(existing_scenarios, indent=2)}\n\n"
-            target_extras = max(3, 10 - len(existing_scenarios))
-            additional_instructions += f"Generate {target_extras} EXTRA damage scenarios covering different components. Return ONLY the new scenarios in your JSON output.\n"
-        
-        # Combine the prompt
-        final_prompt = base_prompt + additional_instructions
+            final_prompt += f"\n### EXISTING SCENARIOS:\n{json.dumps(existing_scenarios, indent=2)}\n"
+            final_prompt += "Generate only 3-5 ADDITIONAL scenarios for assets NOT listed above."
 
-        print("\n" + "="*80)
-        print("FINAL PROMPT (first 1500 chars):")
-        print("="*80)
-        print(final_prompt[:1500] + "..." if len(final_prompt) > 1500 else final_prompt)
-        print("="*80 + "\n")
-
-        # Save prompt for debugging
-        try:
-            with open("damage_scenario_prompt.txt", "w", encoding="utf-8") as f:
-                f.write(final_prompt)
-            print("✅ Damage scenario prompt saved to damage_scenario_prompt.txt")
-        except Exception as e:
-            print(f"Could not save prompt: {e}")
-
-        # ── Call Gemini using the RAG generator from pipeline ──
-        from app.v1.rag.pipeline import setup as pipeline_setup
-        from app.v1.rag.ingest import load_all_documents
-        
-        print("Loading documents and calling Gemini with RAG context...")
         all_docs = load_all_documents()
-        retriever, generator, text_embedder = pipeline_setup(all_docs)
-        
-        # Retrieve relevant documents for context
-        embedding = text_embedder.run(text=system_name)["embedding"]
-        retrieval_result = retriever.run(query_embedding=embedding)
-        retrieved_docs = retrieval_result["documents"][:3]  # Top 3 documents
-        
-        # Add retrieved documents context to prompt
-        doc_context = "\n\n### RETRIEVED REFERENCE DOCUMENTS:\n"
-        for doc in retrieved_docs:
-            content = getattr(doc, 'content', str(doc))[:1500]  # Limit content length
-            source = getattr(doc, 'meta', {}).get('source', 'Unknown')
-            doc_context += f"\n---\nSource: {source}\n{content}\n---\n"
-        
-        final_prompt_with_context = final_prompt + doc_context
-        
-        print("Calling Gemini API...")
-        result = generator.run(parts=[final_prompt_with_context])
+        _, generator, _ = pipeline_setup(all_docs)
+        result = generator.run(parts=[final_prompt])
         output = result["replies"][0] if result["replies"] else "{}"
-        
-        # Clean markdown fences
+
+        # Clean and parse new scenarios
         cleaned = re.sub(r"```[a-z]*", "", output).strip().strip("`")
-        cleaned = re.sub(r'//.*', '', cleaned)
-        
-        # Fix common JSON issues
-        cleaned = re.sub(r',\s*}', '}', cleaned)
-        cleaned = re.sub(r',\s*]', ']', cleaned)
-
-        # Parse JSON - expect { "type": "User-defined", "Details": [...] }
         try:
-            # Try to extract JSON if there's extra text
-            json_match = re.search(r'\{.*\}(?=\s*$|\s*\[)', cleaned, re.DOTALL)
-            if json_match:
-                cleaned = json_match.group(0)
-            
-            damage_data = json.loads(cleaned)
-            
-            # Extract Details array
-            user_defined_details = []
-            
-            if "Details" in damage_data:
-                user_defined_details = damage_data["Details"]
-            elif "type" in damage_data and damage_data["type"] == "User-defined":
-                user_defined_details = damage_data.get("Details", [])
-            elif isinstance(damage_data, list):
-                user_defined_details = damage_data
-            else:
-                # Try to find Details anywhere
-                for key, value in damage_data.items():
-                    if isinstance(value, list) and len(value) > 0:
-                        if isinstance(value[0], dict) and "Name" in value[0]:
-                            user_defined_details = value
-                            break
-            
-            print(f"✅ Extracted {len(user_defined_details)} EXTRA damage scenarios from response")
-            
-            if not user_defined_details and not existing_scenarios:
-                raise ValueError("No Details array found in response")
-            
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"❌ Failed to parse response: {e}")
-            print(f"Raw output: {cleaned[:500]}")
-            
-            if existing_scenarios:
-                print("⚠️ Falling back exclusively to existing reference scenarios due to LLM failure.")
-                user_defined_details = []
-            else:
-                return jsonify({
-                    "error": "Failed to generate valid damage scenarios",
-                    "details": str(e),
-                    "raw_response": cleaned[:1000]
-                }), 500
+            new_data = json.loads(cleaned)
+            new_details = new_data.get("Details", [])
+        except:
+            new_details = []
 
-        # ── Validate and enhance each detail ──
-        valid_node_ids = {node.get("id") for node in template.get("nodes", [])}
-        valid_node_labels = {node.get("data", {}).get("label"): node.get("id") 
-                            for node in template.get("nodes", [])}
-        
-        validated_details = []
-        for i, detail in enumerate(user_defined_details):
-            if not isinstance(detail, dict):
-                continue
-                
-            # Ensure required fields
-            if "Name" not in detail or not detail["Name"]:
-                continue
-            
-            if "Description" not in detail or not detail["Description"]:
-                continue
-            
-            # Ensure cyberLosses
-            if "cyberLosses" not in detail or not detail["cyberLosses"]:
-                continue
-            
-            # Validate and fix nodeIds in cyberLosses
-            validated_losses = []
-            for loss in detail.get("cyberLosses", []):
-                if not isinstance(loss, dict):
-                    continue
-                    
-                loss_node_id = loss.get("nodeId", "")
-                loss_node_name = loss.get("node", "")
-                
-                # Check if nodeId is valid
-                if loss_node_id not in valid_node_ids:
-                    # Try to find by label
-                    if loss_node_name in valid_node_labels:
-                        loss["nodeId"] = valid_node_labels[loss_node_name]
-                        loss["node"] = loss_node_name
-                        validated_losses.append(loss)
-                    else:
-                        # Try partial match
-                        found = False
-                        for label, nid in valid_node_labels.items():
-                            if loss_node_name.lower() in label.lower() or label.lower() in loss_node_name.lower():
-                                loss["nodeId"] = nid
-                                loss["node"] = label
-                                validated_losses.append(loss)
-                                found = True
-                                break
-                        if not found:
-                            print(f"Scenario {i+1}: Cannot find node '{loss_node_name}' in architecture. Dropping cyberLoss.")
-                else:
-                    validated_losses.append(loss)
-            
-            detail["cyberLosses"] = validated_losses
-            
-            # Ensure impacts
-            if "impacts" not in detail:
-                detail["impacts"] = {
-                    "Financial Impact": "Moderate",
-                    "Safety Impact": "Moderate",
-                    "Operational Impact": "Moderate",
-                    "Privacy Impact": "Negligible"
-                }
-            
-            # Ensure each cyberLoss has required fields
-            for loss in detail["cyberLosses"]:
-                if "id" not in loss or not loss["id"]:
-                    loss["id"] = str(uuid.uuid4())
-                if "is_risk_added" not in loss:
-                    loss["is_risk_added"] = False
-                if "isSelected" not in loss:
-                    loss["isSelected"] = True
-            
-            # Add required fields
-            if "_id" not in detail:
-                detail["_id"] = str(uuid.uuid4())
-            
-            validated_details.append(detail)
-        
-        print(f"✅ Validated {len(validated_details)} extra damage scenarios")
-
-        # ✅ FIX: Combine existing scenarios with the newly generated extras
-        combined_details = existing_scenarios + validated_details
-        
-        # Safely re-key them sequentially
+        # --- STEP 5: Combine, Key, and Save ---
+        combined_details = existing_scenarios + new_details
         for i, detail in enumerate(combined_details):
             detail["key"] = i + 1
 
-        print(f"✅ Total Damage Scenarios to save: {len(combined_details)}")
+        db.Damage_scenarios.update_one(
+            {"model_id": model_id, "type": "User-defined"},
+            {"$set": {"Details": combined_details, "last_updated": datetime.now()}},
+            upsert=True
+        )
 
-        # ── Store in database as "User-defined" type only ──
-        from datetime import datetime
-        
-        current_time = datetime.now()
-        
-        existing = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
-        
-        if existing:
-            result = db.Damage_scenarios.update_one(
-                {"model_id": model_id, "type": "User-defined"},
-                {
-                    "$set": {
-                        "Details": combined_details,
-                        "last_updated": current_time
-                    }
-                }
-            )
-            operation = "updated"
-            scenario_id = str(existing["_id"])
-        else:
-            damage_doc = {
-                "model_id": model_id,
-                "type": "User-defined",
-                "Details": combined_details,
-                "created_at": current_time,
-                "last_updated": current_time
-            }
-            result = db.Damage_scenarios.insert_one(damage_doc)
-            operation = "created"
-            scenario_id = str(result.inserted_id)
-
-        # Convert ObjectIds to strings for safe JSON serialization
-        def convert_objectid(obj):
-            if isinstance(obj, ObjectId):
-                return str(obj)
-            if isinstance(obj, list):
-                return [convert_objectid(i) for i in obj]
-            if isinstance(obj, dict):
-                return {k: convert_objectid(v) for k, v in obj.items()}
-            return obj
-
-        safe_scenarios = convert_objectid({
-            "Details": combined_details
-        })
-
-        result_data = {
-            "message": f"Damage scenarios {operation} successfully",
-            "scenario_id": scenario_id,
-            "model_id": model_id,
-            "scenarios": safe_scenarios,
-            "stats": {
-                "total_scenarios": len(combined_details),
-                "pulled_from_reference": len(existing_scenarios),
-                "generated_extras": len(validated_details)
-            }
-        }
-
-        if standalone:
-            return result_data
-        return jsonify(result_data), 201
+        return jsonify({"message": "Damage scenarios updated with full asset remapping", "count": len(combined_details)}), 201
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
-        if standalone:
-            raise e
-        return jsonify({"error in damage scenario generation": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
+
 
 #4 - Threat scenario creation
 # Manual threat creation
 @modelprompt.route('/v1/generate/threat-scenarios', methods=['POST'])
 def create_threat_scenarios(model_id=None):
+    """
+    Generate derived threat scenarios.
+
+    Pattern mirrors assets and damage scenarios:
+      1. Try bms_1.json explicitly → fallback to resolve_reference_report
+      2. Build ref nodeId→label map (nodes only).
+      3. Remap every reference derived TS row to the CURRENT architecture:
+         - Normal UUID nodeIds  → look up ref label → fuzzy match current arch
+         - reactflow__edge-… IDs → fall back to matching the item's 'node'
+           name string against current arch labels (Strategy B)
+      4. Insert remapped rows verbatim; only derive fresh rows for DS IDs
+         not already covered by reference.
+      5. Combine and save.
+    """
     try:
         if not model_id:
             return jsonify({"error": "model_id is required"}), 400
 
+        # ── 1. Load damage scenarios ─────────────────────────────────────────
         damage_doc = db.Damage_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
         if not damage_doc or "Details" not in damage_doc:
             return jsonify({"error": "No damage scenarios found for this model_id"}), 404
 
-        threat_details = []
+        damage_details = damage_doc["Details"]
 
-        for i, damage in enumerate(damage_doc["Details"], start=1):
+        # ── 2. Current architecture label↔id maps ───────────────────────────
+        curr_label_to_id = {}
+        curr_id_to_label = {}
+        try:
+            asset_doc = db.Assets.find_one({"model_id": model_id})
+            if asset_doc and "template" in asset_doc:
+                for n in asset_doc["template"].get("nodes", []):
+                    if n.get("type") != "group":
+                        lbl = (n.get("data", {}).get("label") or "").lower().strip()
+                        nid = n.get("id", "")
+                        if lbl:
+                            curr_label_to_id[lbl] = nid
+                        if nid:
+                            curr_id_to_label[nid] = lbl
+        except Exception as e:
+            print(f"[WARNING] Could not fetch current architecture nodes: {e}")
+
+        def _fuzzy_match(name):
+            if not name:
+                return None, None
+            nl = name.lower().strip()
+            if nl in curr_label_to_id:
+                return curr_label_to_id[nl], nl
+            for lbl, nid in curr_label_to_id.items():
+                if nl in lbl or lbl in nl:
+                    return nid, lbl
+            nw = set(nl.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+            best_score, best = 0, None
+            for lbl, nid in curr_label_to_id.items():
+                lw = set(lbl.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+                score = len(nw & lw)
+                if score > best_score:
+                    best_score, best = score, (nid, lbl)
+            if best and best_score > 0:
+                return best
+            return None, None
+
+        def _remap_to_current(node_name, node_id):
+            # Strategy B: edge-based ID → match by name string
+            if node_id and node_id.startswith("reactflow__edge"):
+                return _fuzzy_match(node_name)
+            # Strategy A: look up ref label for this ref nodeId
+            ref_lbl = ref_id_to_label.get(node_id, "")
+            if ref_lbl:
+                nid, lbl = _fuzzy_match(ref_lbl)
+                if nid:
+                    return nid, lbl
+            return _fuzzy_match(node_name)  # Strategy A fallback
+
+        # ── 3. Pull reference data ───────────────────────────────────────────
+        from app.v1.rag.components import resolve_ecu, resolve_reference_report
+        from app.v1.rag.azure_client import get_azure_client
+        from app.v1.rag.config import AZURE_PATHS
+        import copy
+
+        reference_data = None
+        try:
+            client = get_azure_client()
+            reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip('/')
+            bms_1_blob = f"{reports_path}/bms_1.json"
+            print(f"  🔍 Pulling reference for derived TS: {bms_1_blob}")
+            bms_1_data = client.download_json(bms_1_blob)
+            if bms_1_data:
+                reference_data = bms_1_data
+                print("  ✅ Loaded bms_1.json for derived threat scenarios")
+        except Exception as e:
+            print(f"  ⚠️ Could not pull bms_1.json: {e}")
+
+        if not reference_data:
+            try:
+                model_doc = db.Models.find_one({"_id": model_id}) or {}
+                system_name = model_doc.get("name", "")
+                ecu_entry = resolve_ecu(system_name)
+                reference_data = resolve_reference_report(ecu_entry, system_name)
+                if reference_data:
+                    print("  ✅ Loaded reference via resolve_reference_report fallback")
+            except Exception as e:
+                print(f"  ⚠️ resolve_reference_report fallback failed: {e}")
+
+        # Build ref nodeId→label map (nodes only)
+        ref_id_to_label = {}
+        if reference_data:
+            ref_assets = reference_data.get("Assets", [])
+            if ref_assets:
+                ref_asset = ref_assets[0] if isinstance(ref_assets, list) else ref_assets
+                for n in ref_asset.get("template", {}).get("nodes", []):
+                    if n.get("type") != "group":
+                        ref_id_to_label[n.get("id", "")] = (
+                            n.get("data", {}).get("label") or ""
+                        ).lower().strip()
+
+        # ── 4. Remap reference derived TS rows deterministically ─────────────
+        remapped_rows = []
+        covered_ds_ids = set()
+
+        if reference_data:
+            for ts_block in reference_data.get("Threat_scenarios", []):
+                if ts_block.get("type", "").lower() != "derived":
+                    continue
+                for row in ts_block.get("Details", []):
+                    row_copy = copy.deepcopy(row)
+                    remapped_items = []
+
+                    for item in row_copy.get("Details", []):
+                        new_id, new_label = _remap_to_current(
+                            item.get("node", ""), item.get("nodeId", "")
+                        )
+                        if new_id:
+                            item["nodeId"] = new_id
+                            item["node"]   = curr_id_to_label.get(new_id, item.get("node", ""))
+                            for p in item.get("props", []):
+                                p["id"] = str(uuid.uuid4())
+                            remapped_items.append(item)
+                        else:
+                            print(f"  ⚠️ No arch match for ref node '{item.get('node')}' "
+                                  f"in row {row.get('id')} — item dropped")
+
+                    if remapped_items:
+                        row_copy["Details"] = remapped_items
+                        row_copy["rowId"]   = str(uuid.uuid4())
+                        remapped_rows.append(row_copy)
+                        covered_ds_ids.add(row_copy.get("id", ""))
+                break  # Only process first "derived" block
+
+        print(f"  ✅ {len(remapped_rows)} reference rows remapped (DS IDs: {sorted(covered_ds_ids)})")
+
+        # ── 5. Fresh rows for DS IDs not covered by reference ────────────────
+        fresh_rows = []
+        for i, damage in enumerate(damage_details, start=1):
+            ds_id = f"DS{str(i).zfill(3)}"
+            if ds_id in covered_ds_ids:
+                continue
+
             threat_detail = {
-                "damage_key": damage["key"],
-                "damage_name": damage["Name"],
-                "id": f"DS{str(i).zfill(3)}",
-                "rowId": damage["_id"],
+                "damage_key": damage.get("key", i),
+                "damage_name": damage.get("Name", ""),
+                "id": ds_id,
+                "rowId": damage.get("_id", str(uuid.uuid4())),
                 "Details": []
             }
-
             for loss in damage.get("cyberLosses", []):
-                threat_node = {
-                    "name": damage["Name"],
-                    "node": loss["node"],
-                    "nodeId": loss["nodeId"],
-                    "props": [
-                        {
-                            "id": str(uuid.uuid4()),
-                            "name": loss["name"],
-                            "isSelected": True,
-                            "is_risk_added": False,
-                            "key": 1
-                        }
-                    ]
-                }
-                threat_detail["Details"].append(threat_node)
+                threat_detail["Details"].append({
+                    "name": damage.get("Name", ""),
+                    "node": loss.get("node", ""),
+                    "nodeId": loss.get("nodeId", ""),
+                    "props": [{
+                        "id": str(uuid.uuid4()),
+                        "name": loss.get("name", "Integrity"),
+                        "isSelected": True,
+                        "is_risk_added": False,
+                        "key": 1
+                    }]
+                })
+            fresh_rows.append(threat_detail)
 
-            threat_details.append(threat_detail)
+        print(f"  ✅ {len(fresh_rows)} fresh rows generated for uncovered DS IDs")
+
+        # ── 6. Combine and save ───────────────────────────────────────────────
+        combined_details = remapped_rows + fresh_rows
 
         threat_scenario_doc = {
             "model_id": model_id,
             "type": "derived",
-            "Details": threat_details
+            "Details": combined_details
         }
 
         db.Threat_scenarios.replace_one(
@@ -1320,10 +1109,16 @@ def create_threat_scenarios(model_id=None):
         return jsonify({
             "message": "Threat scenarios created successfully",
             "model_id": model_id,
-            "scenarios": saved_doc
+            "scenarios": saved_doc,
+            "stats": {
+                "total_rows": len(combined_details),
+                "pulled_from_reference": len(remapped_rows),
+                "generated_fresh": len(fresh_rows)
+            }
         }), 201
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error in threat scenario": str(e)}), 500
 
 
@@ -1355,12 +1150,13 @@ def group_threats_by_node(threat_ids):
         grouped[key].append(threat)
     return grouped
 
-def generate_single_derived_scenario(threat_group, user_prompt=None, max_retries=2, generator=None, doc_context="", dynamic_prompt_lines="", custom_prompt=""):
+def generate_single_derived_scenario(threat_group, user_prompt=None, max_retries=3, generator=None, doc_context="", dynamic_prompt_lines="", custom_prompt=""):
     """
     Generate a derived threat scenario name + description from a group of threats.
     If user_prompt is provided, it replaces the intro part of the prompt.
-    Includes retry logic for JSON parsing failures.
+    Includes retry logic for JSON parsing failures and API rate limits.
     """
+    import time
     
     default_intro = f"""
         You are a cybersecurity expert. Based on the following related threats, generate a meaningful name and a concise description for a derived threat scenario. Do not use generic names like "Derived Threat Scenario".
@@ -1422,6 +1218,7 @@ def generate_single_derived_scenario(threat_group, user_prompt=None, max_retries
             cleaned = re.sub(r'\'\s*:', '":', cleaned)  # Fix keys with single quotes
             
             # Try to extract JSON if there's extra text
+            # FIXED: Added the `cleaned` string argument here
             json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
             if json_match:
                 cleaned = json_match.group(0)
@@ -1441,287 +1238,561 @@ def generate_single_derived_scenario(threat_group, user_prompt=None, max_retries
                 "description": description
             }
             
-        except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        except Exception as e:
+            error_str = str(e)
+            
+            # Catch Rate Limits (429) specifically and pause execution
+            if "429" in error_str or "Quota" in error_str or "ResourceExhausted" in error_str:
+                wait_time = 15 # Safe default wait
+                # Extract wait time from error message if available
+                match = re.search(r"retry in ([\d.]+)s", error_str)
+                if match:
+                    wait_time = int(float(match.group(1))) + 2
+                
+                print(f"  ⏳ [RATE LIMIT] Gemini API quota exceeded. Pausing for {wait_time} seconds...")
+                time.sleep(wait_time)
+                
+                if attempt < max_retries:
+                    continue # Retry the exact same request
+                else:
+                    return {
+                        "name": "Generated Derived Threat (Rate Limited)",
+                        "description": f"Derived from {len(threat_group)} related threats. (Auto-generated due to API rate limits)"
+                    }
+
+            # Handle JSON parsing errors
             if attempt < max_retries:
                 print(f"⚠️ Attempt {attempt + 1} failed for JSON parsing. Retrying...")
-                print(f"   Error: {str(e)}")
-                print(f"   Raw text preview: {content_text[:200]}...")
                 # Modify prompt for retry to emphasize JSON format
-                user_prompt = f"""
+                prompt_intro = f"""
                     {prompt_intro}
                     
                     IMPORTANT: You MUST return ONLY valid JSON. No markdown, no extra text, no explanations.
                     The response must be exactly in this format:
                     {{"name": "Your scenario name here", "description": "Your description here"}}
-                    
-                    Previous attempt failed with error: {str(e)}
-                    Make sure your response is valid JSON with no trailing commas or unescaped characters.
                 """
+                time.sleep(2) # Brief pause before standard retry
                 continue
             else:
-                print("⚠️ Failed to parse Gemini response after all retries. Raw text:\n", content_text)
-                # Return a fallback instead of raising exception
+                print("⚠️ Failed to parse Gemini response after all retries. Error:", str(e))
                 return {
                     "name": "Generated Derived Threat",
                     "description": f"Derived from {len(threat_group)} related threats. (Auto-generated due to parsing error)"
                 }
 
 
-# In ModelPrompt.py, replace generate_derived_threat_scenarios function
-
-def generate_derived_threat_scenarios(model_id, threat_ids, name="", description="", user_prompt=None, system_name="", dynamic_prompt_lines="", custom_prompt=""):
+def generate_derived_threat_scenarios(
+    model_id,
+    threat_ids,
+    name="",
+    description="",
+    user_prompt=None,
+    system_name="",
+    dynamic_prompt_lines="",
+    custom_prompt="",
+):
     """
-    Generate derived threat scenarios.
-    Pulls existing scenes from reference JSON, generates extras via LLM.
-    No fallbacks - if LLM fails, report the failure.
+    Generate derived threat scenarios (stored as 'User-defined' in DB).
+ 
+    Pulls existing scenes from the reference JSON, remaps their threat_ids
+    (including edges) to the current architecture, and generates extras for
+    unmapped threats via LLM.
     """
+    import jinja2
+    import time
+    from app.v1.rag.pipeline import setup as pipeline_setup
+    from app.v1.rag.ingest import load_all_documents
+    from app.v1.rag.components import resolve_ecu, resolve_reference_report
+    import uuid, json, re, os, traceback
+    from db import db
+ 
     details = []
-    
+ 
+    # ── fast-path: caller already provides a name + description ──────────────
     if name or description:
-        # User provided explicit name/description
         if not isinstance(description, str):
             if isinstance(description, list):
-                description = " ".join(str(item) for item in description)
+                description = " ".join(str(i) for i in description)
             else:
                 description = json.dumps(description, ensure_ascii=False)
-
-        derived = {
-            "name": name or "Unnamed Derived Threat",
-            "description": description,
-            "id": str(uuid.uuid4()),
-            "threat_ids": threat_ids
-        }
-        details.append(derived)
-    else:
+ 
+        details.append(
+            {
+                "name": name or "Unnamed Derived Threat",
+                "description": description,
+                "id": str(uuid.uuid4()),
+                "threat_ids": threat_ids,
+            }
+        )
+        return {"Details": details}
+ 
+    try:
+        # Work on the full list to allow multiple reference scenarios to share threats.
+        full_threat_list = list(threat_ids)
+        claimed_threat_signatures = set()
+ 
+        # ── 1. Build label ↔ id maps for the CURRENT architecture ─────────────
+        current_node_label_to_id = {}
+        current_edge_label_to_id = {}
+        current_all_ids = set()
+ 
         try:
-            grouped = group_threats_by_node(threat_ids)
-            print(f"[INFO] Grouped {len(threat_ids)} threats into {len(grouped)} groups")
-            
-            # ── Pull existing derived scenarios from reference ──
-            existing_derived_map = {}
-            unmapped_ref_threats = []
-            current_node_label_to_id = {}
-            
+            asset_doc = db.Assets.find_one({"model_id": model_id})
+            if asset_doc and "template" in asset_doc:
+                for n in asset_doc["template"].get("nodes", []):
+                    if n.get("type") != "group":
+                        nid = n.get("id")
+                        lbl = (
+                            n.get("data", {}).get("label") or n.get("label", "")
+                        ).lower().strip()
+                        if lbl:
+                            current_node_label_to_id[lbl] = nid
+                        if nid:
+                            current_all_ids.add(nid)
+                for e in asset_doc["template"].get("edges", []):
+                    eid = e.get("id")
+                    lbl = (
+                        e.get("data", {}).get("label") or e.get("label", "")
+                    ).lower().strip()
+                    if lbl:
+                        current_edge_label_to_id[lbl] = eid
+                    if eid:
+                        current_all_ids.add(eid)
+        except Exception as exc:
+            print(f"[WARNING] Could not fetch current architecture nodes/edges: {exc}")
+ 
+        def _fuzzy_match(name, map1, map2):
+            """Exact → substring → word-overlap match across two label maps."""
+            if not name:
+                return None
+            nl = name.lower().strip()
+            for m in (map1, map2):
+                if nl in m:
+                    return m[nl]
+                for lbl, nid in m.items():
+                    if nl in lbl or lbl in nl:
+                        return nid
+                nw = (
+                    set(nl.replace("-", " ").replace("_", " ").split())
+                    - {"", "the", "and", "of"}
+                )
+                best_score, best = 0, None
+                for lbl, nid in m.items():
+                    lw = set(lbl.replace("-", " ").replace("_", " ").split()) - {
+                        "",
+                        "the",
+                        "and",
+                        "of",
+                    }
+                    score = len(nw & lw)
+                    if score > best_score:
+                        best_score, best = score, nid
+                if best and best_score > 0:
+                    return best
+            return None
+ 
+        # ── 2. Load reference JSON ────────────────────────────────────────────
+        reference_data = None
+        ref_id_to_label = {}
+ 
+        resolved_system_name = system_name
+        if not resolved_system_name:
             try:
-                asset_doc = db.Assets.find_one({"model_id": model_id})
-                if asset_doc and "template" in asset_doc:
-                    for n in asset_doc["template"].get("nodes", []):
+                model_doc = db.Models.find_one(
+                    {"_id": model_id}
+                ) or db.Models.find_one({"model_id": model_id})
+                if model_doc:
+                    resolved_system_name = model_doc.get(
+                        "name", model_doc.get("systemName", "")
+                    )
+            except Exception as exc:
+                print(f"[WARNING] Could not resolve system_name from DB: {exc}")
+ 
+        try:
+            from app.v1.rag.azure_client import get_azure_client
+            from app.v1.rag.config import AZURE_PATHS
+ 
+            client = get_azure_client()
+ 
+            try:
+                reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip("/")
+                bms_1_blob = f"{reports_path}/bms_1.json"
+                reference_data = client.download_json(bms_1_blob)
+                if reference_data:
+                    print("  ✅ Loaded bms_1.json for reference threats")
+            except Exception as exc:
+                print(f"  ⚠️ Could not pull bms_1.json: {exc}")
+ 
+            if not reference_data and resolved_system_name:
+                ecu_entry = resolve_ecu(resolved_system_name)
+                reference_data = resolve_reference_report(
+                    ecu_entry, resolved_system_name
+                )
+ 
+            if reference_data:
+                ref_assets = reference_data.get("Assets", [])
+                if ref_assets:
+                    ref_asset = (
+                        ref_assets[0] if isinstance(ref_assets, list) else ref_assets
+                    )
+                    for n in ref_asset.get("template", {}).get("nodes", []):
                         if n.get("type") != "group":
-                            lbl = n.get("data", {}).get("label", "").lower()
+                            lbl = (
+                                n.get("data", {}).get("label") or n.get("label", "")
+                            ).lower().strip()
                             if lbl:
-                                current_node_label_to_id[lbl] = n.get("id")
-            except Exception as e:
-                print(f"[WARNING] Could not fetch current architecture nodes: {e}")
-                
-            if system_name:
-                try:
-                    from app.v1.rag.azure_client import get_azure_client
-                    from app.v1.rag.config import AZURE_PATHS
-                    
-                    client = get_azure_client()
-                    reference_data = None
-                    
-                    # Try to pull bms_1.json first
-                    try:
-                        reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip('/')
-                        bms_1_blob = f"{reports_path}/bms_1.json"
-                        print(f"  🔍 Pulling reference: {bms_1_blob}")
-                        bms_1_data = client.download_json(bms_1_blob)
-                        
-                        if bms_1_data:
-                            reference_data = bms_1_data
-                            print("  ✅ Loaded bms_1.json")
-                    except Exception as e:
-                        print(f"  ⚠️ Could not pull bms_1.json: {e}")
-
-                    if not reference_data:
-                        from app.v1.rag.components import resolve_ecu, resolve_reference_report
-                        ecu_entry = resolve_ecu(system_name)
-                        reference_data = resolve_reference_report(ecu_entry, system_name)
-                    
-                    if reference_data:
-                        # Build ref_id_to_label map
-                        ref_id_to_label = {}
-                        ref_assets = reference_data.get("Assets", [])
-                        if ref_assets:
-                            ref_asset = ref_assets[0] if isinstance(ref_assets, list) else ref_assets
-                            for n in ref_asset.get("template", {}).get("nodes", []):
-                                if n.get("type") != "group":
-                                    ref_id_to_label[n.get("id")] = n.get("data", {}).get("label", "").lower()
-                        
-                        # Extract existing derived scenes from reference Threat_scenarios
-                        for ts_block in reference_data.get("Threat_scenarios", []):
-                            ts_type = ts_block.get("type", "")
-                            
-                            if ts_type in ["User-defined", "derived", "Derived"]:
-                                ref_details = ts_block.get("Details", [])
-                                
-                                for ref_dt in ref_details:
-                                    ref_name = ref_dt.get("name", ref_dt.get("Name", ""))
-                                    ref_desc = ref_dt.get("description", ref_dt.get("Description", ""))
-                                    
-                                    # Skip auto-generated derivations (loss of Integrity, etc.)
-                                    skip_keywords = ["loss of", "ds due to", "check for ds"]
-                                    if not ref_name or not ref_desc or any(kw in ref_name.lower() for kw in skip_keywords):
-                                        continue
-                                    
-                                    ref_threats = ref_dt.get("threat_ids", [])
-                                    ref_node_id = None
-                                    
-                                    if ref_threats and isinstance(ref_threats, list) and len(ref_threats) > 0:
-                                        first_threat = ref_threats[0]
-                                        if isinstance(first_threat, dict):
-                                            ref_node_id = first_threat.get("nodeId", "")
-                                        elif isinstance(first_threat, str):
-                                            ref_node_id = first_threat
-                                    
-                                    ref_label = ref_id_to_label.get(ref_node_id, "") if ref_node_id else ""
-                                    
-                                    mapped = False
-                                    if ref_label and ref_label in current_node_label_to_id:
-                                        current_node_id = current_node_label_to_id[ref_label]
-                                        if current_node_id not in existing_derived_map:
-                                            existing_derived_map[current_node_id] = {
-                                                "name": ref_name,
-                                                "description": ref_desc,
-                                                "threat_ids": ref_threats
-                                            }
-                                            mapped = True
-                                            print(f"  ✅ Mapped: {ref_name} -> {ref_label}")
-                                    
-                                    if not mapped and ref_name and ref_desc:
-                                        unmapped_ref_threats.append({
-                                            "name": ref_name,
-                                            "description": ref_desc,
-                                            "threat_ids": ref_threats
-                                        })
-                        
-                        print(f"  📋 Found {len(existing_derived_map)} mapped, {len(unmapped_ref_threats)} unmapped reference scenes")
-                        
-                except Exception as e:
-                    print(f"[WARNING] Failed to process reference data: {e}")
-            
-            # ── Assign scenarios to threat groups ──
-            for group_key, group in grouped.items():
-                try:
-                    # 1. Try exact node-mapped scenario
-                    if group_key in existing_derived_map:
-                        ref_dt = existing_derived_map[group_key]
-                        derived = {
-                            "name": ref_dt["name"],
-                            "description": ref_dt["description"],
-                            "id": str(uuid.uuid4()),
-                            "threat_ids": group
-                        }
-                        details.append(derived)
-                        print(f"[SUCCESS] Reused: {derived['name']}")
-                    
-                    # 2. Try unmapped pool
-                    elif unmapped_ref_threats:
-                        ref_dt = unmapped_ref_threats.pop(0)
-                        derived = {
-                            "name": ref_dt["name"],
-                            "description": ref_dt["description"],
-                            "id": str(uuid.uuid4()),
-                            "threat_ids": group
-                        }
-                        details.append(derived)
-                        print(f"[SUCCESS] Reused (Fallback): {derived['name']}")
-                    
-                    # 3. Generate extra via LLM
-                    else:
-                        print(f"[INFO] Generating EXTRA via LLM for group: {group_key}")
-                        
-                        # Set up RAG context for generation
-                        doc_context = ""
-                        generator = None
-                        
-                        try:
-                            from app.v1.rag.pipeline import setup as pipeline_setup
-                            from app.v1.rag.ingest import load_all_documents
-                            
-                            all_docs = load_all_documents()
-                            retriever, generator, text_embedder = pipeline_setup(all_docs)
-                            
-                            if system_name:
-                                embedding = text_embedder.run(text=system_name)["embedding"]
-                                retrieval_result = retriever.run(query_embedding=embedding)
-                                retrieved_docs = retrieval_result["documents"][:3]
-                                
-                                doc_context = "\n\n### RETRIEVED REFERENCE DOCUMENTS:\n"
-                                for doc in retrieved_docs:
-                                    content = getattr(doc, 'content', str(doc))[:1500]
-                                    source = getattr(doc, 'meta', {}).get('source', 'Unknown')
-                                    doc_context += f"\n---\nSource: {source}\n{content}\n---\n"
-                        except Exception as e:
-                            print(f"[WARNING] Failed to load RAG context: {e}")
-                        
-                        result = generate_single_derived_scenario(
-                            group, 
-                            user_prompt,
-                            generator=generator,
-                            doc_context=doc_context,
-                            dynamic_prompt_lines=dynamic_prompt_lines,
-                            custom_prompt=custom_prompt
-                        )
-                        
-                        description_text = result.get("description", "")
-                        if not isinstance(description_text, str):
-                            if isinstance(description_text, list):
-                                description_text = " ".join(str(item) for item in description_text)
-                            else:
-                                description_text = json.dumps(description_text, ensure_ascii=False)
-                        
-                        derived = {
-                            "name": result.get("name", "Unnamed Derived Threat"),
-                            "description": description_text,
-                            "id": str(uuid.uuid4()),
-                            "threat_ids": group
-                        }
-                        details.append(derived)
-                        print(f"[SUCCESS] Generated: {derived['name']}")
-                    
-                except Exception as e:
-                    print(f"[ERROR] Failed to generate for group {group_key}: {str(e)}")
-                    traceback.print_exc()
-                    # Just skip this group - no fallback
+                                ref_id_to_label[n.get("id")] = lbl
+                    for e in ref_asset.get("template", {}).get("edges", []):
+                        lbl = (
+                            e.get("data", {}).get("label") or e.get("label", "")
+                        ).lower().strip()
+                        if lbl:
+                            ref_id_to_label[e.get("id")] = lbl
+        except Exception as exc:
+            print(f"[WARNING] Failed to process reference data: {exc}")
+ 
+        # ── 3. Extract + remap User-defined reference scenarios ───────────────
+        extracted_ref_scenarios = []
+ 
+        if reference_data:
+            for ts_block in reference_data.get("Threat_scenarios", []):
+                if ts_block.get("type", "").lower() not in (
+                    "user-defined",
+                    "user_defined",
+                ):
                     continue
-                    
-        except Exception as e:
-            print(f"[CRITICAL] Error in grouping threats: {str(e)}")
-            traceback.print_exc()
-            # Return empty - no fallback
-            return {}
-    
-    # Save to database
+ 
+                for ref_dt in ts_block.get("Details", []):
+                    ref_name = ref_dt.get("name", ref_dt.get("Name", ""))
+                    ref_desc = ref_dt.get(
+                        "description", ref_dt.get("Description", "")
+                    )
+ 
+                    skip_keywords = ["loss of", "ds due to", "check for ds"]
+                    if not ref_name or not ref_desc or any(
+                        kw in ref_name.lower() for kw in skip_keywords
+                    ):
+                        continue
+ 
+                    # --- Resolve which CURRENT nodeIds this scenario covers ---
+                    target_current_node_ids = set()
+                    for tid in ref_dt.get("threat_ids", []):
+                        ref_nid = tid.get("nodeId", "")
+ 
+                        curr_nid = None
+                        if ref_nid in current_all_ids:
+                            curr_nid = ref_nid
+                        else:
+                            ref_lbl = ref_id_to_label.get(ref_nid, "")
+                            if ref_lbl:
+                                if ref_nid.startswith("reactflow__edge"):
+                                    curr_nid = _fuzzy_match(
+                                        ref_lbl,
+                                        current_edge_label_to_id,
+                                        current_node_label_to_id,
+                                    )
+                                else:
+                                    curr_nid = _fuzzy_match(
+                                        ref_lbl,
+                                        current_node_label_to_id,
+                                        current_edge_label_to_id,
+                                    )
+ 
+                        if curr_nid:
+                            target_current_node_ids.add(curr_nid)
+
+                    # ── Expand: also pull in ReactFlow edge-based threats
+                    edge_expansions = set()
+                    for nid in target_current_node_ids:
+                        for threat in full_threat_list:
+                            tid_nid = threat.get("nodeId", "")
+                            if tid_nid.startswith("reactflow__edge") and nid in tid_nid:
+                                edge_expansions.add(tid_nid)
+                    if edge_expansions:
+                        target_current_node_ids.update(edge_expansions)
+                        print(
+                            f"  🔗 Edge expansion: added {len(edge_expansions)} "
+                            f"connected edge nodeId(s) to claim set for "
+                            f"'{ref_name}'."
+                        )
+
+                    if not target_current_node_ids:
+                        continue
+ 
+                    # --- Claim ALL threat entries for those nodeIds -----------
+                    claimed = []
+                    for threat in full_threat_list:
+                        if threat.get("nodeId") in target_current_node_ids:
+                            claimed.append(threat)
+                            # Record the signature so we know this threat is covered
+                            claimed_threat_signatures.add(
+                                (threat.get("nodeId", ""), threat.get("propId", ""), threat.get("rowId", ""))
+                            )
+ 
+                    if claimed:
+                        mapped_scenario = {
+                            "name": ref_name,
+                            "description": ref_desc,
+                            "id": str(uuid.uuid4()),
+                            "threat_ids": claimed,   # ← ALL entries mapped correctly
+                        }
+                        details.append(mapped_scenario)
+                        extracted_ref_scenarios.append(mapped_scenario)
+                        print(
+                            f"  ✅ Mapped reference scenario '{ref_name}': "
+                            f"{len(claimed)} threat_ids claimed."
+                        )
+                    else:
+                        print(
+                            f"  ⚠️  Reference scenario '{ref_name}' resolved "
+                            f"{len(target_current_node_ids)} node(s) but no "
+                            f"threat_ids in the current pool match — skipping."
+                        )
+ 
+        # Populate available_threats for the LLM fallback (threats not claimed by ANY reference scenario)
+        available_threats = []
+        for threat in full_threat_list:
+            sig = (threat.get("nodeId", ""), threat.get("propId", ""), threat.get("rowId", ""))
+            if sig not in claimed_threat_signatures:
+                available_threats.append(threat)
+ 
+        # ── DEBUG: log extracted scenarios and remaining pool ─────────────────
+        try:
+            os.makedirs("outputs/debug", exist_ok=True)
+            with open(
+                "outputs/debug/api_reference_derived_threats.json", "w", encoding="utf-8"
+            ) as f:
+                json.dump(
+                    {
+                        "system_name": resolved_system_name,
+                        "extracted_user_defined_scenarios": extracted_ref_scenarios,
+                        "remaining_unmapped_threats": available_threats,
+                    },
+                    f,
+                    indent=2,
+                )
+        except Exception as exc:
+            print(f"[DEBUG LOGGING FAILED]: {exc}")
+ 
+        # ── 4. Group remaining unmapped threats and send to LLM ──────────────
+        unmapped_groups_raw = group_threats_by_node(available_threats)
+ 
+        # Replace long reactflow__edge-… keys with short stable aliases so the
+        # LLM can echo them back reliably.
+        alias_to_original = {}
+        original_to_alias = {}
+        alias_counter = 1
+        for key in unmapped_groups_raw:
+            if key.startswith("reactflow__edge"):
+                alias = f"edge_group_{alias_counter}"
+                alias_counter += 1
+                alias_to_original[alias] = key
+                original_to_alias[key] = alias
+ 
+        unmapped_groups = {
+            original_to_alias.get(k, k): v for k, v in unmapped_groups_raw.items()
+        }
+ 
+        if unmapped_groups:
+            print(
+                f"[INFO] Generating {len(unmapped_groups)} scenarios via single LLM batch call..."
+            )
+ 
+            doc_context = ""
+            generator = None
+            try:
+                all_docs = load_all_documents()
+                retriever, generator, text_embedder = pipeline_setup(all_docs)
+ 
+                if resolved_system_name:
+                    embedding = text_embedder.run(text=resolved_system_name)[
+                        "embedding"
+                    ]
+                    retrieval_result = retriever.run(query_embedding=embedding)
+                    doc_context = "\n\n### RETRIEVED REFERENCE DOCUMENTS:\n"
+                    for doc in retrieval_result["documents"][:3]:
+                        doc_context += (
+                            f"\n---\nSource: "
+                            f"{getattr(doc, 'meta', {}).get('source', 'Unknown')}\n"
+                            f"{getattr(doc, 'content', str(doc))[:1500]}\n---\n"
+                        )
+            except Exception as exc:
+                print(f"[WARNING] Failed to load RAG context: {exc}")
+ 
+            prompt_intro = (
+                user_prompt
+                or f"""
+            You are a cybersecurity expert. I have {len(unmapped_groups)} groups of threats
+            that need specific, meaningful attack scenario names and descriptions.
+            Do not use generic names like "Derived Threat Scenario".
+            """
+            )
+ 
+            additional_instructions = ""
+            if custom_prompt:
+                additional_instructions += (
+                    f"\n\n### CUSTOM REQUIREMENTS:\n{custom_prompt}\n"
+                )
+            if dynamic_prompt_lines:
+                additional_instructions += (
+                    f"\n\n### ADDITIONAL SYSTEM DETAILS:\n{dynamic_prompt_lines}\n"
+                )
+ 
+            prompt = f"""
+            {prompt_intro}
+            {additional_instructions}
+            {doc_context}
+ 
+            Generate threat scenarios using STRIDE categories.
+Each should include: targeted component, attack vector, attacker goal, and related damage scenario.
+            
+ 
+            ### THREAT GROUPS REQUIRING SCENARIOS:
+            {json.dumps(unmapped_groups, indent=2)}
+ 
+            ### TASK:
+            Generate a JSON dictionary where the keys are the EXACT group IDs provided above, and the values are objects containing a 'name' and 'description' for that group.
+            
+            Example output format:
+            {{
+              "group-id-1": {{
+                "name": "Specific Scenario Name",
+                "description": "Detailed description of how these threats combine."
+              }},
+              "group-id-2": {{
+                "name": "Another Scenario Name",
+                "description": "Another detailed description."
+              }}
+            }}
+            
+            Return ONLY a valid JSON object. No markdown fences.
+            """
+ 
+            # DEBUG: log the prompt sent to the LLM
+            try:
+                os.makedirs("outputs/debug", exist_ok=True)
+                with open(
+                    "outputs/debug/api_rag_llm_feed.txt", "w", encoding="utf-8"
+                ) as f:
+                    f.write("=== RAG DOC CONTEXT FED TO LLM ===\n")
+                    f.write(doc_context if doc_context else "No RAG context fetched.")
+                    f.write("\n\n=== FULL PROMPT FED TO LLM ===\n")
+                    f.write(prompt)
+            except Exception as exc:
+                print(f"[DEBUG LOGGING FAILED]: {exc}")
+ 
+            for attempt in range(3):
+                try:
+                    if generator:
+                        result = generator.run(parts=[prompt])
+                        content_text = (
+                            result["replies"][0] if result["replies"] else "{}"
+                        )
+                    else:
+                        gemini_response = gemini_client.generate_content(prompt)
+                        content_text = gemini_client.get_text(gemini_response)
+ 
+                    cleaned = extract_json_from_text(content_text)
+                    cleaned = re.sub(r"[\x00-\x1F\x7F]", "", cleaned)
+                    if cleaned.startswith("```"):
+                        cleaned = re.sub(r"^```\w*\n?", "", cleaned).replace(
+                            "```", ""
+                        )
+ 
+                    json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+                    if json_match:
+                        cleaned = json_match.group(0)
+ 
+                    batch_results = json.loads(cleaned)
+ 
+                    for g_id, g_data in batch_results.items():
+                        original_key = alias_to_original.get(g_id, g_id)
+                        if g_id in unmapped_groups or original_key in unmapped_groups_raw:
+                            threat_list = unmapped_groups.get(
+                                g_id
+                            ) or unmapped_groups_raw.get(original_key, [])
+                            desc = g_data.get("description", "")
+                            if isinstance(desc, list):
+                                desc = " ".join(str(i) for i in desc)
+                            elif not isinstance(desc, str):
+                                desc = str(desc)
+ 
+                            details.append(
+                                {
+                                    "name": g_data.get(
+                                        "name", "Generated Threat Scenario"
+                                    ),
+                                    "description": desc,
+                                    "id": str(uuid.uuid4()),
+                                    "threat_ids": threat_list,
+                                }
+                            )
+                            unmapped_groups.pop(g_id, None)
+                            unmapped_groups_raw.pop(original_key, None)
+ 
+                    if unmapped_groups:
+                        raise ValueError(
+                            f"LLM did not return scenarios for all groups. "
+                            f"Missing: {list(unmapped_groups.keys())}"
+                        )
+ 
+                    break
+ 
+                except Exception as exc:
+                    err = str(exc)
+                    if (
+                        "429" in err
+                        or "Quota" in err
+                        or "ResourceExhausted" in err
+                    ):
+                        wait = 15
+                        m = re.search(r"retry in ([\d.]+)s", err)
+                        if m:
+                            wait = int(float(m.group(1))) + 2
+                        print(f"  ⏳ [RATE LIMIT] Batch paused for {wait}s...")
+                        time.sleep(wait)
+                        continue
+ 
+                    print(f"⚠️ Batch attempt {attempt + 1} failed: {exc}")
+                    if attempt == 2:
+                        raise RuntimeError(
+                            f"Failed to generate derived threat scenarios via LLM. "
+                            f"Last error: {err}"
+                        )
+                    time.sleep(2)
+ 
+    except Exception as exc:
+        print(f"[CRITICAL] Error in derived threat scenario generation: {exc}")
+        traceback.print_exc()
+        raise exc
+ 
+    # ── 5. Save to database ───────────────────────────────────────────────────
     if details:
         document = {
             "model_id": model_id,
             "type": "User-defined",
             "Details": details,
             "generated_at": time.time(),
-            "total_derived": len(details)
+            "total_derived": len(details),
         }
-        
+ 
         try:
             db.Threat_scenarios.replace_one(
                 {"model_id": model_id, "type": "User-defined"},
                 document,
-                upsert=True
+                upsert=True,
             )
-            
-            saved_doc = db.Threat_scenarios.find_one({"model_id": model_id, "type": "User-defined"})
+            saved_doc = db.Threat_scenarios.find_one(
+                {"model_id": model_id, "type": "User-defined"}
+            )
             if saved_doc:
                 saved_doc["_id"] = str(saved_doc["_id"])
             return saved_doc
-        except Exception as e:
-            print(f"[ERROR] Failed to save: {str(e)}")
-            document["_id"] = "unsaved"
-            return document
-    
-    return {}
-
-
+        except Exception as exc:
+            print(f"[ERROR] Failed to save: {exc}")
+            raise exc
+ 
+    return {} 
 
 @modelprompt.route('/v1/generate/derived-threat-scenarios', methods=['POST'])
 def create_derived_threat_scenario():
@@ -2738,9 +2809,9 @@ def generate_full_model():
         }
 
         # Generate damage scenarios
-        scenarios_response = create_damage_scenarios(
+        scenarios_response = create_damage_scenarios_with_rag(
             standalone=True,
-            request_data=type('', (), {'form': scenario_request})()
+            request_data=type('', (), {'form': scenario_request, 'is_json': False})()
         )
         scenarios_data = scenarios_response.get_json() if hasattr(scenarios_response, 'get_json') else scenarios_response
 
@@ -2842,7 +2913,6 @@ def clean_control_chars(s):
     # Remove unescaped control characters (except \n, \t if you want to keep them)
     return re.sub(r'[\x00-\x1F\x7F]', '', s)
 
-# Add this to your ModelPrompt.py file
 
 @modelprompt.route('/v1/generate/item-and-damage', methods=['POST'])
 def generate_item_and_damage():

@@ -1,16 +1,6 @@
 # =============================================================================
 # prompt.py — TARA generation prompt templates (Multi-Agent Pipeline)
 # =============================================================================
-#
-# Each pipeline agent uses its own specialized prompt:
-#   Architect Agent  → ARCHITECT_PROMPT  → System architecture (nodes, edges, Details)
-#   Threat Analyst   → THREAT_PROMPT     → Threat derivations with nodeId refs
-#   Damage Analyst   → DAMAGE_PROMPT     → Damage impact assessments
-#
-# TARA_PROMPT_TEMPLATE is retained for backward compatibility but is NOT
-# called by any pipeline node.
-# =============================================================================
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REFERENCE SCHEMA (not used by any pipeline node)
@@ -30,7 +20,6 @@ individual agent outputs) follows this schema:
   "Attacks":           [{ "type": "attack_trees", "scenes": [...] }]
 }
 """
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. ARCHITECT AGENT
@@ -356,7 +345,6 @@ Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `
 }
 """
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. DAMAGE ANALYST AGENT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -447,3 +435,170 @@ Return ONLY a valid JSON object. No markdown fences. No extra text. Start with `
 - Each scenario should have 2-4 cyberLosses on average
 - Vary the impact ratings across scenarios
 """
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. THREAT SCENARIO AGENT
+# ─────────────────────────────────────────────────────────────────────────────
+THREAT_SCENARIO_PROMPT = """
+You are a Cybersecurity Threat Scenario Specialist performing ISO 21434 TARA threat scenario generation.
+
+TARGET SYSTEM: {{ question }}
+
+### SYSTEM ARCHITECTURE (for nodeId reference):
+{{ architecture }}
+
+### DAMAGE SCENARIOS (for DS mapping):
+{{ damage_scenarios }}
+
+### THREATS (for prop and nodeId cross-reference):
+{{ threats }}
+
+### YOUR TASK:
+Generate a complete Threat_scenarios structure with exactly TWO objects:
+  1. type: "derived"   — pin each DS entry to its affected node(s) and cybersecurity properties from the architecture.
+  2. type: "User-defined" — generate realistic, named attack scenarios that reference the derived DS rows via threat_ids.
+
+**CRITICAL: If existing threat scenarios are shown below in the "EXISTING THREAT SCENARIOS" sections, 
+you MUST include them VERBATIM in your output WITHOUT ANY MODIFICATIONS. You may only add additional 
+threat scenarios as extras that do NOT duplicate the existing ones.**
+
+### STRICT RULES:
+
+**DERIVED OBJECT:**
+1. Each `Details` entry maps to one damage scenario (DS001, DS002, ... in sequence).
+2. Each DS entry contains one or more node `Details` items — one per affected node from the architecture.
+3. Each node `Details` item contains:
+   - `node`: Human-readable component name (MUST match architecture node label exactly)
+   - `nodeId`: MUST be the EXACT node `id` from the architecture JSON. Copy it verbatim. Do NOT invent UUIDs.
+   - `props`: Array of cybersecurity properties relevant to this node for this threat scenario.
+   - `name`: The damage scenario name (same as the DS name from damage_scenarios).
+4. Each prop entry MUST have:
+   - `id`: A unique string ID (format: `"ts-<dsid>-<node-short>-<prop-short>"`, e.g. `"ts-ds001-codeflash-integ"`)
+   - `is_risk_added`: boolean — set `true` if this prop is the PRIMARY loss type for this DS, else `false`
+   - `name`: One of `Integrity` | `Confidentiality` | `Authenticity` | `Authorization` | `Availability` | `Non-repudiation`
+   - `isSelected`: always `true`
+   - `key`: integer, incrementing per prop within each node block starting at 1
+5. `rowId`: A unique UUID-format string per DS row (generate a valid UUID v4).
+6. `id`: Sequential DS identifier — "DS001", "DS002", etc.
+
+**USER-DEFINED OBJECT:**
+1. Generate one named attack scenario per 2–3 derived DS entries (group related DS rows together).
+2. Each scenario MUST have:
+   - `name`: A specific, realistic attack name (e.g. "CAN Bus Replay Attack", "JTAG Firmware Extraction")
+   - `description`: A detailed, technically accurate attack description (2–4 sentences). Reference specific nodes, protocols, and consequences.
+   - `id`: A unique UUID v4 string.
+   - `threat_ids`: Array of prop references from the derived DS entries that this attack exploits. Each entry MUST have:
+       - `propId`: The EXACT `id` value of the prop from the derived Details (copy verbatim).
+       - `nodeId`: The EXACT node `id` from the architecture (copy verbatim).
+       - `rowId`: The EXACT `rowId` of the DS row this prop belongs to (copy verbatim).
+
+### CROSS-REFERENCE INTEGRITY (CRITICAL):
+- Every `nodeId` in both derived and user-defined sections MUST exist in the architecture JSON.
+- Every `propId` in `threat_ids` MUST match an `id` in the derived `props` array exactly.
+- Every `rowId` in `threat_ids` MUST match a `rowId` in the derived Details exactly.
+- Do NOT invent any IDs. Copy them exactly from the inputs provided.
+
+### OUTPUT FORMAT:
+Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `{`.
+
+{
+  "Threat_scenarios": [
+    {
+      "_id": "",
+      "model_id": "",
+      "type": "derived",
+      "Details": [
+        {
+          "rowId": "<uuid-v4>",
+          "id": "DS001",
+          "Details": [
+            {
+              "node": "<exact-node-label-from-architecture>",
+              "nodeId": "<exact-node-id-from-architecture>",
+              "props": [
+                {
+                  "id": "ts-ds001-<node-short>-<prop-short>",
+                  "is_risk_added": true,
+                  "name": "Integrity",
+                  "isSelected": true,
+                  "key": 1
+                }
+              ],
+              "name": "<damage-scenario-name>"
+            }
+          ]
+        }
+      ],
+      "user_id": ""
+    },
+    {
+      "_id": "",
+      "model_id": "",
+      "type": "User-defined",
+      "Details": [
+        {
+          "name": "<realistic-attack-name>",
+          "description": "<detailed-technical-attack-description>",
+          "id": "<uuid-v4>",
+          "threat_ids": [
+            {
+              "propId": "<exact-prop-id-from-derived-props>",
+              "nodeId": "<exact-node-id-from-architecture>",
+              "rowId": "<exact-rowid-from-derived-details>"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. ATTACK TREE AGENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+ATTACK_TREE_PROMPT = """
+You are a Red-Team automotive cybersecurity expert performing a TARA analysis (ISO 21434).
+
+SYSTEM CONTEXT:
+System Name: {{ system_name }}
+Architecture Components: {{ components | join(', ') }}
+
+THREAT SCENARIO TO ANALYZE:
+ID: {{ ts_id }}
+Goal: "{{ goal }}"
+Threat Category: {{ category }}
+Target Asset: {{ asset }}
+
+TASK:
+Generate a technical 2-level Attack Tree for this specific threat scenario.
+
+REQUIREMENTS:
+1. Use OR-Gate logic (any one path can achieve the goal).
+2. Level 1 (Attack Vectors): Identify 3 distinct attack vectors (e.g., Physical Access, Remote Exploitation, Supply Chain) targeting the system components.
+3. Level 2 (Technical Methods): Identify 2-3 specific technical methods for each vector (e.g., UDS Session control, CAN Bus Injection, Debug Port exploitation).
+4. Reference actual components from the architecture list above.
+5. Output must be technical and specific to automotive protocols.
+
+OUTPUT FORMAT:
+Return ONLY valid JSON. No markdown, no commentary.
+{
+  "goal": "{{ goal }}",
+  "gate": "OR",
+  "type": "surface_goal",
+  "asset": "{{ asset }}",
+  "children": [
+    {
+      "goal": "Attack Vector description",
+      "gate": "OR",
+      "type": "attack_vector",
+      "children": [
+        {"goal": "Specific technical method 1", "type": "method"},
+        {"goal": "Specific technical method 2", "type": "method"}
+      ]
+    }
+  ]
+}
+"""
+

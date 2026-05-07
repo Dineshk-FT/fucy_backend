@@ -10,55 +10,75 @@ import copy
 import uuid
 from google.api_core.exceptions import ResourceExhausted
 from app.v1.rag.cache_manager import save_cache, load_cache
-import time
 
 from app.v1.rag.components import build_store, build_retriever, build_generator
 from app.v1.rag.config import RETRIEVER_TOP_K
-from app.v1.rag.prompt import TARA_PROMPT_TEMPLATE
 
-# ── GLOBAL CONFIGURATION (Change these to adjust output depth) ───────────────
-MAX_NODES       = 14   # Component nodes to generate (excluding groups)
-MAX_EDGES       = 11   # Number of edges/connections
-MAX_GROUPS      = 4    # Maximum number of group containers
-MAX_THREATS     = 5    # Number of technical threat derivations (Agent 2)
-MAX_SCENARIOS   = 5    # Number of STRIDE-mapped scenarios (Agent 3)
+# ── GLOBAL CONFIGURATION ─────────────────────────────────────────────────────
+MAX_NODES       = 14   
+MAX_EDGES       = 11   
+MAX_GROUPS      = 4    
+MAX_THREATS     = 5    
+MAX_SCENARIOS   = 5    
 
-MIN_QUALITY_NODES = 3  # Minimum nodes required to pass quality check
-MIN_QUALITY_TS    = 3  # Minimum scenarios required to pass quality check
-# ─────────────────────────────────────────────────────────────────────────────
+MIN_QUALITY_NODES = 3  
+MIN_QUALITY_TS    = 3  
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ---------------- STATE ----------------
 class RAGState(TypedDict):
     user_query: str
     enriched_query: str
     documents: list
-    architecture: dict       # High-quality system design
-    threats: list            # Detailed threat analysis
-    damage_details: list     # Impact/damage details per threat
-    threat_scenarios: list   # Automated Threat Scenarios
-    attacks: list            # React Flow attack trees
-    answer: str              # Final Combined JSON
+    architecture: dict       
+    threats: list            
+    damage_details: list     
+    threat_scenarios: list   
+    attacks: list            
+    answer: str              
     retry_count: int
     full_prompt: str
     eval_score: int
     eval_details: dict
 
-# ---------------- SETUP ----------------
 def setup(all_docs):
     store, text_embedder = build_store(all_docs)
     retriever = build_retriever(store)
     generator = build_generator()
     return retriever, generator, text_embedder
 
+def clean_json_response(raw_text: str) -> str:
+    """Aggressively extract JSON object or array from LLM response to prevent parsing crashes."""
+    if not raw_text:
+        return "{}"
+        
+    text = raw_text.strip()
+    
+    # Strip markdown backticks
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"```$", "", text.strip())
+    
+    # Extract JSON boundaries
+    start_obj = text.find('{')
+    start_arr = text.find('[')
+    
+    if start_obj == -1 and start_arr == -1:
+        return "{}"
+        
+    start_idx = start_obj if start_obj != -1 and (start_arr == -1 or start_obj < start_arr) else start_arr
+    end_char = '}' if start_idx == start_obj else ']'
+    end_idx = text.rfind(end_char)
+    
+    if end_idx != -1:
+        text = text[start_idx:end_idx+1]
+        
+    return text.strip()
+
 def safe_generate(prompt: str, role_name: str = "Agent"):
-    """Thin wrapper to handle Gemini free-tier rate limits with auto-sleep and deep retries."""
-    max_retries = 5  # Increased for better persistence
+    max_retries = 5  
     for attempt in range(max_retries):
         try:
             return generator.run(parts=[prompt])
         except ResourceExhausted as e:
-            # Deep back-off for free tier
             wait_time = 90 + (attempt * 60) 
             msg = str(e)
             if "retry in" in msg:
@@ -69,15 +89,14 @@ def safe_generate(prompt: str, role_name: str = "Agent"):
                 except:
                     pass
             
-            print(f"  ⚠️  {role_name} Quota hit (Attempt {attempt+1}/{max_retries}). Sleeping {wait_time}s...")
+            print(f"  ⚠️  {role_name} Quota hit. Sleeping {wait_time}s...")
             time.sleep(wait_time)
         except Exception as e:
             print(f"  ❌ {role_name} error: {e}")
-            time.sleep(10) # Small cooldown on generic errors
+            time.sleep(10)
     return {"replies": ["Failed due to repeated quota errors."]}
 
 def log_prompt(node_name: str, context: list, prompt: str, response: str):
-    """Logs everything goig from RAG to LLM in outputs/prompts"""
     log_dir = os.path.join("outputs", "prompts")
     os.makedirs(log_dir, exist_ok=True)
     
@@ -87,7 +106,7 @@ def log_prompt(node_name: str, context: list, prompt: str, response: str):
     
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"=== {node_name.upper()} LOG ===\n")
-        f.write(f"RAG CONTEXT (First 3 docs):\n")
+        f.write("RAG CONTEXT (First 3 docs):\n")
         for i, doc in enumerate(context[:3]):
             content = getattr(doc, 'content', str(doc))
             f.write(f"DOC {i}: {content[:300]}...\n")
@@ -97,157 +116,48 @@ def log_prompt(node_name: str, context: list, prompt: str, response: str):
         f.write(response)
         f.write("\n" + "="*50 + "\n")
 
-# ---------------- QUALITY-AWARE RETRY ----------------
-
-MIN_NODES       = MIN_QUALITY_NODES
-MIN_THREATS     = MIN_QUALITY_TS
-MIN_DETAILS     = MIN_QUALITY_TS
-MIN_SCENARIOS   = MIN_QUALITY_TS
-
-
-def _score_section(state: RAGState) -> dict:
-    """Per-section quality flags."""
-    arch  = state.get("architecture", {})
-    all_nodes = arch.get("template", {}).get("nodes", arch.get("nodes", []))
-    nodes = [n for n in all_nodes if n.get("type") != "group"]
-    threats   = state.get("threats", [])
-    details   = state.get("damage_details", [])
-    scenarios = state.get("threat_scenarios", [])
-    return {
-        "arch_ok":      len(nodes)     >= MIN_NODES,
-        "threats_ok":   len(threats)   >= MIN_THREATS,
-        "details_ok":   len(details)   >= MIN_DETAILS,
-        "scenarios_ok": len(scenarios) >= MIN_SCENARIOS,
-        "node_count":      len(nodes),
-        "threat_count":    len(threats),
-        "detail_count":    len(details),
-        "scenario_count":  len(scenarios),
-    }
-
-
-def _should_retry(state: RAGState) -> str:
-    """Quality-aware conditional edge.
-    
-    Checks each section against minimum quality thresholds.
-    If any section fails AND we have retries left → retry.
-    On retry, only FAILING sections are cleared from cache,
-    so passing sections are served from cache (no wasted tokens).
-    """
-    retry     = state.get("retry_count", 0)
-    max_retry = 2   # up to 2 reflection passes
-    qc        = _score_section(state)
-
-    failing = [k for k, v in qc.items() if k.endswith("_ok") and not v]
-
-    print(f"  🔍 Quality Check | nodes={qc['node_count']} threats={qc['threat_count']} "
-          f"details={qc['detail_count']} scenarios={qc['scenario_count']}")
-
-    if failing and retry < max_retry:
-        print(f"  🔁 Sections below threshold: {failing} — "
-              f"retrying (attempt {retry+1}/{max_retry}) [cached sections preserved]")
-        return "retry"
-    elif failing:
-        print(f"  ⚠️  Max retries reached. Accepting output (failing: {failing}).")
-        return "done"
-    else:
-        print(f"  ✅ All sections passed quality check!")
-        return "done"
-
-
-def _bump_retry(state: RAGState):
-    """Selectively clear ONLY failing sections from cache.
-    
-    Passing sections stay cached → their nodes return instantly from cache.
-    Failing sections are evicted → their nodes will call the API again.
-    """
-    from app.v1.rag.cache_manager import get_cache_key
-    query  = state.get("user_query", "")
-    retry  = state.get("retry_count", 0) + 1
-    qc     = _score_section(state)
-
-    # Map section name to: (cache_step_key, state_key_to_clear)
-    section_map = {
-        "arch_ok":      ("architect",  "architecture"),
-        "threats_ok":   ("threats",    "threats"),
-        "details_ok":   ("damage",     "damage_details"),
-        "scenarios_ok": (None,         "threat_scenarios"),  # deterministic, no cache key
-    }
-
-    reset_state = {"retry_count": retry}
-
-    for flag, (cache_step, state_key) in section_map.items():
-        if not qc.get(flag, True):   # section FAILED quality check
-            print(f"  🗑️  Evicting cache for failing section: {state_key}")
-            if cache_step:
-                cache_file = get_cache_key(query, cache_step)
-                if os.path.exists(cache_file):
-                    os.remove(cache_file)
-            reset_state[state_key] = [] if state_key != "architecture" else {}
-        else:
-            print(f"  💾 Keeping cache for passing section: {state_key}")
-
-    return reset_state
-
 def retrieve(state: RAGState):
-    """Retrieves relevant documents using the Haystack retriever."""
     query = state.get("enriched_query") or state.get("user_query")
     embedding = text_embedder.run(text=query)["embedding"]
     result = retriever.run(query_embedding=embedding)
-    # Safety: ensure we don't pass massive content if context is bloated
     docs = result["documents"][:RETRIEVER_TOP_K]
     return {"documents": docs}
 
 def architect_node(state: RAGState):
-    """Deep technical discovery to build the system architecture."""
     query = state.get("user_query", "") or state.get("query", "")
 
     from app.v1.rag.prompt import ARCHITECT_PROMPT
     from app.v1.rag.components import resolve_ecu, resolve_reference_report, build_ref_context
 
     ecu_entry = resolve_ecu(query)
-    if ecu_entry:
-        print(f"  🔍 ECU resolved: {ecu_entry.get('name', '?')}")
-    else:
-        print("  ℹ️  No ECU match — proceeding without ECU hint.")
-
     reference_data = resolve_reference_report(ecu_entry, query)
 
     ref_context, ecu_hint_context = build_ref_context(reference_data, ecu_entry)
 
-    # ── BUILD REFERENCE PROPERTIES MAP ──
-    # If we have reference data, extract node properties to enforce in output
-    ref_properties_map = {}
-    ref_edge_properties_map = {}
-    
+    # Build comprehensive reference map
+    ref_node_map = {}
+    ref_edge_map = {}
     if reference_data:
         ref_assets = reference_data.get("Assets", [])
         if ref_assets:
             ref_asset = ref_assets[0] if isinstance(ref_assets, list) else ref_assets
             ref_template = ref_asset.get("template", {})
-            ref_nodes = ref_template.get("nodes", [])
-            ref_edges = ref_template.get("edges", [])
             
-            # ✅ FIX: Map properties by both label AND spatial position (fingerprint)
-            for node in ref_nodes:
-                label = node.get("data", {}).get("label", "")
-                props = node.get("properties", None)
-                pos = node.get("position", {})
-                pos_key = f"{pos.get('x')}_{pos.get('y')}"
+            for rn in ref_template.get("nodes", []):
+                lbl = rn.get("data", {}).get("label", "").lower().strip()
+                if lbl:
+                    ref_node_map[lbl] = rn
+                ref_node_map[rn.get("id")] = rn
                 
-                if props is not None:
-                    if label:
-                        ref_properties_map[label.lower()] = props
-                    if pos_key and pos_key != "None_None":
-                        ref_properties_map[pos_key] = props
-                        print(f"  📋 Ref node fingerprint '{pos_key}' properties: {props}")
-            
-            # Build edge properties map by label
-            for edge in ref_edges:
-                label = edge.get("data", {}).get("label", edge.get("label", ""))
-                props = edge.get("properties", None)
-                if label and props is not None:
-                    ref_edge_properties_map[label.lower()] = props
-                    print(f"  📋 Ref edge '{label}' properties: {props}")
+            for re in ref_template.get("edges", []):
+                s_id = re.get("source")
+                t_id = re.get("target")
+                s_node = ref_node_map.get(s_id)
+                t_node = ref_node_map.get(t_id)
+                if s_node and t_node:
+                    s_lbl = s_node.get("data", {}).get("label", "").lower().strip()
+                    t_lbl = t_node.get("data", {}).get("label", "").lower().strip()
+                    ref_edge_map[f"{s_lbl}->{t_lbl}"] = re
 
     tmpl = jinja2.Template(ARCHITECT_PROMPT)
     prompt = tmpl.render(
@@ -260,190 +170,108 @@ def architect_node(state: RAGState):
         ecu_hint_context=ecu_hint_context,
     )
     
-    # Save the architect prompt for debugging
-    prompt_file = f"architect_prompt_{query.replace(' ', '_')}.txt"
-    with open(prompt_file, "w", encoding="utf-8") as f:
-        f.write(prompt)
-    print(f"  📝 Saved architect prompt to {prompt_file}")
-    
     result = safe_generate(prompt, "Architect")
     raw_json = result["replies"][0] if result["replies"] else "{}"
     
-    # Log the RAG and LLM activity
     log_prompt("architect_node", state["documents"], prompt, raw_json)
     
-    # Cooldown
     time.sleep(10)
     try:
-        cleaned = re.sub(r"^```[a-z]*\n?", "", raw_json.strip(), flags=re.MULTILINE)
-        cleaned = re.sub(r"```$", "", cleaned.strip())
+        cleaned = clean_json_response(raw_json)
         arch_data = json.loads(cleaned)
         
-        # Flexibly find architecture data
-        if "template" in arch_data:
-            assets = arch_data
-        elif "Assets" in arch_data:
-            a = arch_data["Assets"]
-            assets = a[0] if isinstance(a, list) and a else a
-        elif "assets" in arch_data:
-            a = arch_data["assets"]
-            assets = a[0] if isinstance(a, list) and a else a
-        else:
-            assets = arch_data
+        if "template" in arch_data: assets = arch_data
+        elif "Assets" in arch_data: assets = arch_data["Assets"][0] if isinstance(arch_data["Assets"], list) and arch_data["Assets"] else arch_data["Assets"]
+        elif "assets" in arch_data: assets = arch_data["assets"][0] if isinstance(arch_data["assets"], list) and arch_data["assets"] else arch_data["assets"]
+        else: assets = arch_data
         
-        # ── ENFORCEMENT: trim to EXACTLY MAX_NODES and MAX_EDGES ──────
         template = assets.get("template", {})
         nodes = template.get("nodes", assets.get("nodes", []))
 
         if not nodes:
-            print(f"  ❌ Architect FAIL: No nodes found.")
-            return {"architecture": {}}
+            return {"architecture": {"template": {"nodes": [], "edges": []}, "Details": []}}
         
-        # ── APPLY REFERENCE PROPERTIES TO NODES ──
+        gen_label_to_id = {n.get("data", {}).get("label", "").lower().strip(): n.get("id") for n in nodes if n.get("id")}
+        
+        # 1. Restore exact Node layouts from Reference
         for node in nodes:
-            ntype = node.get("type", "default")
-            if ntype == "group":
-                # Groups don't need security properties
-                if "properties" not in node:
-                    node["properties"] = []
-                continue
+            node_label = node.get("data", {}).get("label", "").lower().strip()
+            orig = ref_node_map.get(node_label)
             
-            node_label = node.get("data", {}).get("label", "")
-            pos = node.get("position", {})
-            pos_key = f"{pos.get('x')}_{pos.get('y')}"
+            if orig:
+                if "position" in orig: node["position"] = orig["position"]
+                if "positionAbsolute" in orig: node["positionAbsolute"] = orig["positionAbsolute"]
+                if "width" in orig: node["width"] = orig["width"]
+                if "height" in orig: node["height"] = orig["height"]
+                if "extent" in orig: node["extent"] = orig["extent"]
+                if "style" in orig.get("data", {}):
+                    if "data" not in node: node["data"] = {}
+                    node["data"]["style"] = orig["data"]["style"]
+                
+                # Link Parent-Child using newly generated UUIDs to preserve structure
+                orig_pid = orig.get("parentId")
+                if orig_pid:
+                    orig_parent_node = next((n for n in ref_node_map.values() if n.get("id") == orig_pid), None)
+                    if orig_parent_node:
+                        p_lbl = orig_parent_node.get("data", {}).get("label", "").lower().strip()
+                        if p_lbl in gen_label_to_id:
+                            node["parentId"] = gen_label_to_id[p_lbl]
+
+                # Map security properties
+                props = orig.get("properties", None)
+                if props is not None:
+                    node["properties"] = props
             
-            # ✅ FIX: Check position fingerprint first, then label fallback
-            if pos_key in ref_properties_map:
-                node["properties"] = ref_properties_map[pos_key]
-                print(f"  📋 Applied ref properties via position to '{node_label}': {node['properties']}")
-            elif node_label.lower() in ref_properties_map:
-                node["properties"] = ref_properties_map[node_label.lower()]
-                print(f"  📋 Applied ref properties via label to '{node_label}': {node['properties']}")
             elif "properties" not in node or node["properties"] is None:
-                # No reference match and no LLM properties - use defaults
-                node["properties"] = ["Integrity", "Confidentiality", "Authenticity", 
-                                     "Authorization", "Availability", "Non-repudiation"]
-                print(f"  ⚠️ No ref match for '{node_label}', using defaults")
+                node["properties"] = ["Integrity", "Confidentiality", "Authenticity", "Authorization", "Availability", "Non-repudiation"]
         
-        # ── APPLY REFERENCE PROPERTIES TO EDGES ──
         edges = template.get("edges", [])
+        
+        # 2. Restore exact Edge routing from Reference
         for edge in edges:
-            edge_label = edge.get("data", {}).get("label", edge.get("label", ""))
+            s_node = next((n for n in nodes if n.get("id") == edge.get("source")), None)
+            t_node = next((n for n in nodes if n.get("id") == edge.get("target")), None)
             
-            if edge_label.lower() in ref_edge_properties_map:
-                ref_props = ref_edge_properties_map[edge_label.lower()]
-                edge["properties"] = ref_props
-                print(f"  📋 Applied ref edge properties to '{edge_label}': {ref_props}")
-            elif "properties" not in edge or edge["properties"] is None:
+            if s_node and t_node:
+                s_lbl = s_node.get("data", {}).get("label", "").lower().strip()
+                t_lbl = t_node.get("data", {}).get("label", "").lower().strip()
+                orig_e = ref_edge_map.get(f"{s_lbl}->{t_lbl}")
+                
+                if orig_e:
+                    if "sourceHandle" in orig_e: edge["sourceHandle"] = orig_e["sourceHandle"]
+                    if "targetHandle" in orig_e: edge["targetHandle"] = orig_e["targetHandle"]
+                    if "data" in orig_e: edge["data"] = orig_e["data"]
+                    if "style" in orig_e: edge["style"] = orig_e["style"]
+                    if "properties" in orig_e: edge["properties"] = orig_e["properties"]
+            
+            if "properties" not in edge or edge["properties"] is None:
                 edge["properties"] = ["Integrity"]
         
-        # Separate groups from components
-        group_nodes = [n for n in nodes if n.get("type") == "group"]
-        component_nodes = [n for n in nodes if n.get("type") != "group"]
-
-        print(f"  📊 LLM generated: {len(component_nodes)} components, {len(group_nodes)} groups")
-        
-        # ENFORCE MAX GROUPS
-        if len(group_nodes) > MAX_GROUPS:
-            print(f"  ✂️  Trimming {len(group_nodes)} groups → {MAX_GROUPS} (MAX_GROUPS)")
-            group_nodes = group_nodes[:MAX_GROUPS]
-        
-        # ENFORCE EXACT COMPONENT COUNT
-        if len(component_nodes) > MAX_NODES:
-            print(f"  ✂️  Trimming {len(component_nodes)} → {MAX_NODES} components")
-            component_nodes = component_nodes[:MAX_NODES]
-        elif len(component_nodes) < MAX_NODES:
-            print(f"  ⚠️  WARNING: Only {len(component_nodes)} components (target: {MAX_NODES})")
-
-        # Combine back
-        trimmed_nodes = group_nodes + component_nodes
-        kept_ids = {n["id"] for n in trimmed_nodes}
-
-        # Process edges
-        print(f"  📊 LLM generated: {len(edges)} edges")
-        
-        # Filter edges that reference kept nodes
-        valid_edges = [
-            e for e in edges
-            if e.get("source") in kept_ids and e.get("target") in kept_ids
-        ]
-        
-        print(f"  🔗 After filtering dangling edges: {len(valid_edges)} edges")
-        
-        # ENFORCE EXACT EDGE COUNT
-        if len(valid_edges) > MAX_EDGES:
-            print(f"  ✂️  Trimming {len(valid_edges)} → {MAX_EDGES} edges")
-            valid_edges = valid_edges[:MAX_EDGES]
-        elif len(valid_edges) < MAX_EDGES:
-            print(f"  ⚠️  WARNING: Only {len(valid_edges)} edges (target: {MAX_EDGES})")
-
-        # Write back
-        template["nodes"] = trimmed_nodes
-        template["edges"] = valid_edges
+        template["nodes"] = nodes
+        template["edges"] = [e for e in edges if e.get("source") in gen_label_to_id.values() and e.get("target") in gen_label_to_id.values()]
         assets["template"] = template
 
-        # Trim Details to match kept nodes
         details = assets.get("Details", [])
         if details:
-            original_detail_count = len(details)
-            assets["Details"] = [d for d in details if d.get("nodeId") in kept_ids]
-            print(f"  📋 Trimmed details: {original_detail_count} → {len(assets['Details'])}")
+            assets["Details"] = [d for d in details if d.get("nodeId") in gen_label_to_id.values()]
 
-        # FINAL VERIFICATION
-        final_comp_count = len([n for n in trimmed_nodes if n.get("type") != "group"])
-        final_edge_count = len(valid_edges)
-        final_group_count = len(group_nodes)
-        
-        print(f"  ✅ Architect FINAL: {final_comp_count} components, "
-              f"{final_group_count} groups, {final_edge_count} edges.")
-        
-        # Save the trimmed output for debugging
-        output_file = f"architect_output_{query.replace(' ', '_')}.json"
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(assets, f, indent=2)
-        print(f"  📝 Saved trimmed output to {output_file}")
-        
-        # Only cache if it meets requirements
-        if final_comp_count == MAX_NODES and final_edge_count == MAX_EDGES:
-            save_cache(query, "architect", assets)
-            print(f"  💾 Cached valid architecture")
-        else:
-            print(f"  ⚠️  NOT caching - counts don't match targets")
-        
         return {"architecture": assets}
         
     except Exception as e:
-        print(f"Architect parsing failed: {e}. Raw: {raw_json[:200]}")
-        import traceback
-        traceback.print_exc()
-        return {"architecture": {}}
+        print(f"  ❌ Architect parsing failed Exception: {e}")
+        return {"architecture": {"template": {"nodes": [], "edges": []}, "Details": []}}
+
 
 def threat_analysis_node(state: RAGState):
-    """Deep technical threat discovery."""
     query = state.get("user_query", "") or state.get("query", "")
     
-    # Check cache first
     cached = load_cache(query, "threats")
     if cached: return {"threats": cached}
     
-    # Bootstrap check - scan results folder for any matching file
-    # res_dir = os.path.join("outputs", "Results")
-    # if os.path.exists(res_dir):
-    #     for filename in os.listdir(res_dir):
-    #         if query.lower().replace(" ", "") in filename.lower().replace(" ", ""):
-    #             res_path = os.path.join(res_dir, filename)
-    #             with open(res_path, "r") as f:
-    #                 data = json.load(f)
-    #                 threats = data.get("threat_scenarios", []) or data.get("damage_scenarios", {}).get("Derivations", [])
-    #                 if threats: 
-    #                     print(f"  ⚡ Bootstrapped Threat result from {filename}!")
-    #                     save_cache(query, "threats", threats)
-    #                     return {"threats": threats}
-
     from app.v1.rag.prompt import THREAT_PROMPT
-    if not state.get("architecture"): return {"threats": []}
+    if not state.get("architecture") or not state["architecture"].get("template", {}).get("nodes"): 
+        return {"threats": []}
     
-    print(f" Analyzing threats (Target: {MAX_THREATS} derivations)...")
     tmpl = jinja2.Template(THREAT_PROMPT)
     prompt = tmpl.render(
         question=state["user_query"],
@@ -455,184 +283,436 @@ def threat_analysis_node(state: RAGState):
     result = safe_generate(prompt, "ThreatAnalyst")
     raw_json = result["replies"][0] if result["replies"] else "{}"
     
-    # Log the RAG and LLM activity
     log_prompt("threat_analysis_node", state["documents"], prompt, raw_json)
     
-    # Cooldown
     time.sleep(10)
     try:
-        cleaned = re.sub(r"^```[a-z]*\n?", "", raw_json.strip(), flags=re.MULTILINE)
-        cleaned = re.sub(r"```$", "", cleaned.strip())
+        cleaned = clean_json_response(raw_json)
         threat_data = json.loads(cleaned)
         
-        # Flexibly find threats
         threats = threat_data.get("Derivations", threat_data.get("threats", threat_data.get("derivations", [])))
         if not threats and isinstance(threat_data, list):
             threats = threat_data
             
-        if not threats:
-            print(f"Threat Analyst FAIL: 0 threats. Snippet: {raw_json[:150]}")
-        else:
-            print(f"Threat Analyst SUCCESS: Found {len(threats)} threats.")
-            
         return {"threats": threats}
     except Exception as e:
-        print(f"Threat parsing failed: {e}. Raw: {raw_json[:200]}")
         return {"threats": []}
 
+def _match_node_label(node_name: str, valid_node_labels: dict):
+    if not node_name:
+        return None, None
+    node_lower = node_name.lower().strip()
 
-def generate_threat_scenarios_node(state: RAGState):
-    """Generates Threat Scenarios from Damage Scenarios using STRIDE mapping.
-    
-    NEW: Also pulls existing threat scenarios from reference data and combines with derived ones.
+    if node_lower in valid_node_labels:
+        return valid_node_labels[node_lower], node_lower
+
+    for label, nid in valid_node_labels.items():
+        if node_lower in label or label in node_lower:
+            return nid, label
+
+    node_words = set(node_lower.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+    best_score, best_match = 0, None
+    for label, nid in valid_node_labels.items():
+        label_words = set(label.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+        overlap = len(node_words & label_words)
+        if overlap > best_score:
+            best_score = overlap
+            best_match = (nid, label)
+
+    if best_match and best_score > 0:
+        return best_match
+
+    return None, None
+
+def threat_scenario_agent_node(state: RAGState):
+    """AGENT 4: Generates the dual Threat_scenarios structure using an LLM.
+
+    PATTERN (mirrors damage_scenario_node exactly):
+      1. Load reference — extract BOTH derived and user-defined rows.
+      2. Deterministically remap every nodeId/propId/rowId to the CURRENT
+         architecture BEFORE touching the LLM.
+         Derived rows — two remapping strategies:
+           a. Normal node IDs  → look up ref label in ref_id_to_label,
+              then fuzzy-match that label against current arch.
+           b. Edge-based IDs  (reactflow__edge-…) → fall back to matching
+              the item's 'node' name string against current arch labels.
+         User-defined rows — remap threat_ids entries:
+           • nodeId   → resolved via ref_id_to_label + ref_derived_node_id_to_label
+                         (the latter captures nodeIds from derived-row items that
+                          differ from the asset-node IDs in ref_id_to_label)
+           • propId   → replaced with the NEW prop UUID assigned during
+                         derived-row remapping (tracked in ref_prop_id_map)
+           • rowId    → replaced with the NEW rowId assigned to the matching
+                         derived row (tracked in ref_row_id_map); if not found,
+                         a fresh UUID is generated so the output is never stale
+      3. Rows where ALL items remapped successfully are inserted verbatim
+         into the output — the LLM never sees them.
+      4. The LLM is asked to generate EXTRA rows not already covered by
+         reference (analogous to damage_scenario_node's target_extras logic).
     """
-    print("Generating automated Threat Scenarios (STRIDE mapping)...")
-    
+    from app.v1.rag.prompt import THREAT_SCENARIO_PROMPT
     from app.v1.rag.components import resolve_ecu, resolve_reference_report
+    import copy
+
     query = state.get("user_query", "") or state.get("query", "")
-    ecu_entry = resolve_ecu(query)
-    reference_data = resolve_reference_report(ecu_entry, query)
-    
+
+    if not state.get("damage_details"):
+        return {"threat_scenarios": []}
+
+    # ── Build current-architecture label→id and id→label maps ────────────
     arch = state.get("architecture", {})
     arch_nodes = arch.get("template", {}).get("nodes", arch.get("nodes", []))
-    
-    valid_node_labels = {n.get("data", {}).get("label", "").lower().strip(): n.get("id") 
-                        for n in arch_nodes if n.get("type") != "group"}
-    
-    _fallback_label = next(iter(valid_node_labels), None)
-    _fallback_id    = valid_node_labels.get(_fallback_label) if _fallback_label else None
-    
-    existing_threat_scenarios = []
+    curr_label_to_id = {}
+    curr_id_to_label = {}
+    for n in arch_nodes:
+        if n.get("type") == "group":
+            continue
+        lbl = (n.get("data", {}).get("label") or "").lower().strip()
+        nid = n.get("id", "")
+        if lbl:
+            curr_label_to_id[lbl] = nid
+        if nid:
+            curr_id_to_label[nid] = lbl
+
+    def _fuzzy_match(name: str):
+        """Exact → substring → word-overlap against current architecture labels."""
+        if not name:
+            return None, None
+        nl = name.lower().strip()
+        if nl in curr_label_to_id:
+            return curr_label_to_id[nl], nl
+        for lbl, nid in curr_label_to_id.items():
+            if nl in lbl or lbl in nl:
+                return nid, lbl
+        nw = set(nl.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+        best_score, best = 0, None
+        for lbl, nid in curr_label_to_id.items():
+            lw = set(lbl.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
+            score = len(nw & lw)
+            if score > best_score:
+                best_score, best = score, (nid, lbl)
+        if best and best_score > 0:
+            return best
+        return None, None
+
+    def _remap_to_current(node_name: str, node_id: str):
+        """Return (new_id, matched_label) for any node/edge reference from reference data.
+        Strategy B – edge-based IDs: use the human-readable node_name directly.
+        Strategy A – normal UUID nodeIds: resolve via ref label map → fuzzy match.
+        Returns (None, None) when no match is possible.
+        """
+        # Strategy B: edge-based ID → match by name string
+        if node_id and node_id.startswith("reactflow__edge"):
+            return _fuzzy_match(node_name)
+        # Strategy A: look up the ref label for this ref nodeId
+        ref_lbl = ref_id_to_label.get(node_id, "")
+        if ref_lbl:
+            matched_id, matched_label = _fuzzy_match(ref_lbl)
+            if matched_id:
+                return matched_id, matched_label
+        # Strategy A fallback: try by node_name directly
+        return _fuzzy_match(node_name)
+
+    # ── STEP 1: Load reference ────────────────────────────────────────────
+    ecu_entry = resolve_ecu(query)
+    reference_data = resolve_reference_report(ecu_entry, query)
+
+    # Build ref nodeId → label lookup (nodes only; edges have no entry here)
+    ref_id_to_label = {}
+    if reference_data:
+        ref_assets = reference_data.get("Assets", [])
+        if ref_assets:
+            ref_asset = ref_assets[0] if isinstance(ref_assets, list) else ref_assets
+            for n in ref_asset.get("template", {}).get("nodes", []):
+                if n.get("type") != "group":
+                    ref_id_to_label[n.get("id", "")] = (
+                        n.get("data", {}).get("label") or ""
+                    ).lower().strip()
+
+    # ── STEP 2a: Deterministically remap DERIVED reference rows ──────────
+    remapped_derived_rows = []   # rows ready to use verbatim
+    covered_ds_ids = set()       # e.g. {"DS001", "DS003", …}
+
+    # Track old ref prop UUID → new prop UUID (needed to fix user-defined threat_ids)
+    ref_prop_id_map = {}   # old_prop_id  → new_prop_id
+    # Track old ref rowId → new rowId (needed to fix user-defined threat_ids)
+    ref_row_id_map  = {}   # old_row_id   → new_row_id
+    # NEW: track old ref nodeId (from derived-row items) → resolved label
+    # This covers nodeIds that appear in threat_ids but are NOT asset-node IDs
+    # (e.g. they are the nodeIds of the derived-row Detail items themselves).
+    ref_derived_node_id_to_label = {}   # old_ref_nodeId → resolved current label
+
+    if reference_data and "Threat_scenarios" in reference_data:
+        print(f"  ✅ Found reference Threat_scenarios — remapping deterministically")
+        for ts_block in reference_data["Threat_scenarios"]:
+            if ts_block.get("type", "").lower() != "derived":
+                continue
+            for row in ts_block.get("Details", []):
+                row_copy = copy.deepcopy(row)
+                remapped_items = []
+                all_ok = True
+
+                for item in row_copy.get("Details", []):
+                    ref_node_name = item.get("node", "")
+                    ref_node_id   = item.get("nodeId", "")
+
+                    new_id, new_label = _remap_to_current(ref_node_name, ref_node_id)
+
+                    if new_id:
+                        # Record old ref nodeId → resolved label so STEP 2b
+                        # can look up node names for user-defined threat_ids.
+                        if ref_node_id:
+                            ref_derived_node_id_to_label[ref_node_id] = new_label or ref_node_name
+                        item["nodeId"] = new_id
+                        item["node"]   = curr_id_to_label.get(new_id, ref_node_name)
+                        # Re-generate prop UUIDs and record old→new mapping
+                        for p in item.get("props", []):
+                            old_pid = p.get("id", "")
+                            new_pid = str(uuid.uuid4())
+                            if old_pid:
+                                ref_prop_id_map[old_pid] = new_pid
+                            p["id"] = new_pid
+                        remapped_items.append(item)
+                    else:
+                        print(f"  ⚠️  No arch match for ref node '{ref_node_name}' "
+                              f"(nodeId={ref_node_id[:24]}…) — dropping item from row {row.get('id')}")
+                        all_ok = False
+
+                if remapped_items:
+                    row_copy["Details"] = remapped_items
+                    old_row_id = row.get("rowId", "")
+                    new_row_id = str(uuid.uuid4())
+                    if old_row_id:
+                        ref_row_id_map[old_row_id] = new_row_id
+                    row_copy["rowId"] = new_row_id
+                    remapped_derived_rows.append(row_copy)
+                    covered_ds_ids.add(row_copy.get("id", ""))
+                    status = "✅ full" if all_ok else "⚠️  partial"
+                    print(f"      ├─ {row.get('id')}: {status} remap "
+                          f"({len(remapped_items)}/{len(row.get('Details',[]))} items)")
+    else:
+        print(f"  ℹ️  No reference threat scenarios available")
+
+    print(f"  ✅ {len(remapped_derived_rows)} reference derived rows remapped and locked in "
+          f"(covering DS IDs: {sorted(covered_ds_ids)})")
+
+    # ── STEP 2b: Deterministically remap USER-DEFINED reference rows ──────
+    remapped_user_defined = []
+
     if reference_data and "Threat_scenarios" in reference_data:
         for ts_block in reference_data["Threat_scenarios"]:
-            # Skip derived threats - they're auto-generated and often incomplete
-            # Only pull from well-structured user-defined threats
-            if ts_block.get("type") in ["User-defined", "user-defined"]:
-                for detail in ts_block.get("Details", []):
-                    if not isinstance(detail, dict):
-                        continue
-                    
-                    # Skip if missing required fields
-                    if not detail.get("name") or not detail.get("nodeId"):
-                        continue
-                    
-                    ts_copy = copy.deepcopy(detail)
-                    remapped_props = []
-                    
-                    for prop in ts_copy.get("props", []):
-                        if not isinstance(prop, dict):
-                            continue
-                        
-                        node_name = ts_copy.get("node", "")
-                        matched_nid, matched_label = _match_node_label(node_name, valid_node_labels)
-                        
-                        if matched_nid:
-                            prop["nodeId"] = matched_nid
-                            ts_copy["nodeId"] = matched_nid
-                            ts_copy["node"] = matched_label
-                        elif _fallback_id:
-                            prop["nodeId"] = _fallback_id
-                            ts_copy["nodeId"] = _fallback_id
-                            ts_copy["node"] = _fallback_label
-                            print(f"  ⚠️  No match for '{node_name}' — assigned to '{_fallback_label}'")
-                        
-                        prop["id"] = str(uuid.uuid4())
-                        remapped_props.append(prop)
-                    
-                    if remapped_props:
-                        ts_copy["props"] = remapped_props
-                    ts_copy["_id"] = str(uuid.uuid4())
-                    existing_threat_scenarios.append(ts_copy)
-    
-    print(f"✅ Found {len(existing_threat_scenarios)} existing threat scenarios from reference.")
-    
-    damage_details = state.get("damage_details", [])
-    derived_threat_scenarios = []
-    
-    stride_mapping = {
-        "Integrity": "Tampering",
-        "Confidentiality":"Information Disclosure",
-        "Availability": "Denial",
-        "Authenticity": "Spoofing",
-        "Authorization": "Elevation of Privilege",
-        "Non-repudiation": "Rejection",
-    }
-    
-    ts_count = len(existing_threat_scenarios) + 1
-    
-    flat_scenarios = []
-    if isinstance(damage_details, list):
-        for block in damage_details:
-            if not isinstance(block, dict): 
-                flat_scenarios.append(block)
+            if ts_block.get("type", "").lower() not in ("user-defined", "user_defined"):
                 continue
-                
-            btype = block.get("type", "")
-            if btype == "Derived":
-                flat_scenarios.extend(block.get("Derivations", []))
-            elif btype == "User-defined":
-                flat_scenarios.extend(block.get("Details", []))
-            else:
-                flat_scenarios.append(block)
-    
-    for ds_index, ds in enumerate(flat_scenarios):
-        ds_id = ds.get("id", ds.get("Name", f"DS{ds_index+1:03}"))
-        if not re.match(r"^DS\d+", str(ds_id)):
-             ds_id = f"DS{ds_index+1:03}"
-             
-        ds_name = ds.get("Name", ds.get("name", "Unnamed Scenario"))
-        
-        losses = ds.get("cyberLosses", ds.get("cyberlosses", []))
-        if not losses:
-            text = (str(ds_name) + " " + str(ds.get("Description", ds.get("task", "")))).lower()
-            inferred = []
-            for prop in stride_mapping.keys():
-                if prop.lower() in text:
-                    inferred.append({"name": prop, "node": "System", "nodeId": ds.get("nodeId", "unknown")})
-            losses = inferred if inferred else [{"name": "Integrity", "node": "System", "nodeId": ds.get("nodeId", "unknown")}]
+            print(f"  ✅ Found reference User-defined Threat_scenarios — remapping deterministically")
+            for ud_row in ts_block.get("Details", []):
+                ud_copy = copy.deepcopy(ud_row)
+                remapped_threat_ids = []
+                all_ok = True
 
-        for loss in losses:
-            loss_name = loss.get("name", loss.get("value", "Integrity"))
-            asset_name = loss.get("node", loss.get("asset", "System"))
-            threat_type = stride_mapping.get(loss_name, "Security Violation")
-            
-            ts_entry = {
-                "node": asset_name,
-                "nodeId": loss.get("nodeId", ""),
-                "props": [
-                    {
-                        "id": str(uuid.uuid4()),
-                        "is_risk_added": True,
-                        "name": loss_name,
-                        "isSelected": True,
-                        "key": 1
-                    }
-                ],
-                "name": f"[{ts_count:03}] {threat_type} of {asset_name}",
-                "damage_scenario": f"[{ds_id}] {ds_name}",
-                "id": f"TS{ts_count:03}",
-            }
-            derived_threat_scenarios.append(ts_entry)
-            ts_count += 1
-    
-    combined_threat_scenarios = existing_threat_scenarios + derived_threat_scenarios
-    
-    print(f"📊 Threat Scenarios Summary:")
-    print(f"   - Existing: {len(existing_threat_scenarios)}")
-    print(f"   - Derived: {len(derived_threat_scenarios)}")
-    print(f"   - Total: {len(combined_threat_scenarios)}")
-    
+                for tid in ud_copy.get("threat_ids", []):
+                    ref_node_id  = tid.get("nodeId", "")
+                    ref_prop_id  = tid.get("propId", "")
+                    ref_row_id   = tid.get("rowId", "")
+
+                    # Resolve node name for this ref_node_id using BOTH lookup maps:
+                    #   1. ref_derived_node_id_to_label  — populated during STEP 2a from
+                    #      derived-row Detail items (covers the common case where the
+                    #      threat_id nodeId matches a derived-row item's old nodeId)
+                    #   2. ref_id_to_label               — populated from asset template nodes
+                    # Passing a resolved name into _remap_to_current dramatically improves
+                    # the fuzzy-match hit rate vs. passing an empty string.
+                    resolved_name = (
+                        ref_derived_node_id_to_label.get(ref_node_id)
+                        or ref_id_to_label.get(ref_node_id, "")
+                    )
+                    new_node_id, _ = _remap_to_current(resolved_name, ref_node_id)
+
+                    # Remap propId via the prop UUID map built during derived remapping
+                    new_prop_id = ref_prop_id_map.get(ref_prop_id, "")
+
+                    # Remap rowId via the row UUID map built during derived remapping
+                    new_row_id = ref_row_id_map.get(ref_row_id, "")
+
+                    if new_node_id:
+                        tid["nodeId"] = new_node_id
+                    else:
+                        print(f"  ⚠️  No arch match for user-defined threat_id nodeId "
+                              f"'{ref_node_id[:24]}…' in scenario '{ud_row.get('name')}' "
+                              f"(resolved_name='{resolved_name}')")
+                        all_ok = False
+
+                    if new_prop_id:
+                        tid["propId"] = new_prop_id
+                    else:
+                        # propId not in derived map — generate a fresh one so the
+                        # output is never left with a stale reference UUID
+                        tid["propId"] = str(uuid.uuid4())
+
+                    if new_row_id:
+                        tid["rowId"] = new_row_id
+                    else:
+                        # rowId not in derived map — generate a fresh UUID so the
+                        # output is never left with a stale reference rowId that
+                        # does not correspond to any row in the current output.
+                        tid["rowId"] = str(uuid.uuid4())
+
+                    remapped_threat_ids.append(tid)
+
+                ud_copy["threat_ids"] = remapped_threat_ids
+                # Assign a fresh id if missing
+                if not ud_copy.get("id"):
+                    ud_copy["id"] = str(uuid.uuid4())
+
+                remapped_user_defined.append(ud_copy)
+                status = "✅ full" if all_ok else "⚠️  partial"
+                print(f"      ├─ User-defined '{ud_row.get('name', 'unnamed')}': {status} remap")
+
+    print(f"  ✅ {len(remapped_user_defined)} reference user-defined rows remapped and locked in")
+
+    # ── STEP 3: Build prompt with existing reference data included ────────
+    print("Generating context-aware Threat Scenarios for uncovered DS rows (Agent 4)...")
+    tmpl = jinja2.Template(THREAT_SCENARIO_PROMPT)
+    prompt = tmpl.render(
+        question=state["user_query"],
+        architecture=json.dumps(state["architecture"], indent=2),
+        damage_scenarios=json.dumps(state["damage_details"], indent=2),
+        threats=json.dumps(state["threats"], indent=2)
+    )
+
+    # ── CRITICAL: Include existing reference data in prompt ────────────────
+    if remapped_derived_rows:
+        existing_derived_count = len(remapped_derived_rows)
+        prompt += (
+            "\n\n### EXISTING DERIVED THREAT SCENARIOS (DO NOT REGENERATE THESE):\n"
+            "The following derived threat scenario rows have already been extracted from "
+            "the reference data and will be inserted verbatim into your output:\n"
+            + json.dumps(remapped_derived_rows, indent=2)
+            + f"\n\nDo NOT regenerate these DS IDs: {sorted(covered_ds_ids)}. "
+            "Only generate derived rows for DS IDs NOT in that list.\n"
+        )
+
+    if remapped_user_defined:
+        existing_ud_count = len(remapped_user_defined)
+        target_ud_extras = max(2, 6 - existing_ud_count)
+        prompt += (
+            "\n\n### EXISTING USER-DEFINED THREAT SCENARIOS (DO NOT REGENERATE THESE):\n"
+            "The following user-defined threat scenarios have already been extracted from "
+            "the reference data and will be inserted verbatim into your output:\n"
+            + json.dumps(remapped_user_defined, indent=2)
+            + f"\n\nGenerate {target_ud_extras} EXTRA user-defined threat scenarios "
+            "covering different attack vectors not already listed above. "
+            "Return ONLY the new scenarios in your JSON output under 'User-defined'.\n"
+        )
+    else:
+        # No user-defined scenarios from reference; ask LLM to generate all
+        prompt += (
+            "\n\nNo user-defined threat scenarios were found in the reference data. "
+            "Generate 3–5 realistic, named user-defined attack scenarios that reference "
+            "the derived DS rows via threat_ids.\n"
+        )
+
+    result = safe_generate(prompt, "ThreatScenarioAnalyst")
+    raw_json = result["replies"][0] if result["replies"] else "{}"
+
+    log_prompt("threat_scenario_agent_node", state.get("documents", []), prompt, raw_json)
+
+    time.sleep(10)
+
+    llm_derived_rows      = []
+    llm_user_defined_rows = []
+
+    try:
+        cleaned = clean_json_response(raw_json)
+        ts_data = json.loads(cleaned)
+        threat_scenarios_llm = ts_data.get("Threat_scenarios", ts_data.get("threat_scenarios", []))
+
+        for block in threat_scenarios_llm:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "").lower()
+            if btype == "derived":
+                for row in block.get("Details", []):
+                    # Skip any DS id that was already covered by reference
+                    if row.get("id") not in covered_ds_ids:
+                        llm_derived_rows.append(row)
+            elif btype in ("user-defined", "user_defined"):
+                for ud in block.get("Details", []):
+                    llm_user_defined_rows.append(ud)
+
+    except Exception as e:
+        print(f"  ❌ LLM Threat Scenario parsing failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # ── STEP 4: Combine reference rows + LLM extras ───────────────────────
+    final_derived_rows      = remapped_derived_rows + llm_derived_rows
+    final_user_defined_rows = remapped_user_defined  + llm_user_defined_rows
+
+    combined_threat_scenarios = [
+        {
+            "type": "derived",
+            "Details": final_derived_rows,
+        }
+    ]
+    if final_user_defined_rows:
+        combined_threat_scenarios.append({
+            "type": "user-defined",
+            "Details": final_user_defined_rows,
+        })
+
+    ref_derived_count  = len(remapped_derived_rows)
+    llm_derived_count  = len(llm_derived_rows)
+    total_derived      = len(final_derived_rows)
+    ref_ud_count       = len(remapped_user_defined)
+    llm_ud_count       = len(llm_user_defined_rows)
+    total_ud           = len(final_user_defined_rows)
+
+    if not final_derived_rows:
+        print("  ⚠️  Threat Scenario Agent FAIL: No derived rows produced.")
+    else:
+        print(f"  ✅ Threat Scenario Agent SUCCESS: "
+              f"{total_derived} derived rows (ref={ref_derived_count}, llm_extras={llm_derived_count}), "
+              f"{total_ud} user-defined rows (ref={ref_ud_count}, llm_extras={llm_ud_count})")
+
     return {"threat_scenarios": combined_threat_scenarios}
-
 
 def generate_attack_trees_node(state: RAGState):
     """Generates simplified attack trees for each threat scenario."""
     print("Generating Attack Trees (React Flow)...")
-    ts_list = state.get("threat_scenarios", [])
+    raw_ts_data = state.get("threat_scenarios", [])
     attacks = []
+    
+    # Extract flat list of derived scenarios safely
+    flat_ts_list = []
+    for block in raw_ts_data:
+        if isinstance(block, dict) and block.get("type", "").lower() == "derived":
+            for ds_group in block.get("Details", []):
+                for ts in ds_group.get("Details", []):
+                    ts_copy = ts.copy()
+                    ts_copy["rowId"] = ds_group.get("rowId", "")
+                    
+                    ds_str = ts.get("damage_scenario", "")
+                    ts_name_str = ts.get("name", "")
+                    
+                    if "]" in ds_str:
+                        parts = ds_str.split("]")
+                        d_id = parts[0].strip("[")
+                        scene_str = f"[{d_id}] {ts_name_str}"
+                        ts_copy["damage_scenario"] = scene_str
+                    else:
+                        grp_id = ds_group.get("id", "")
+                        scene_str = f"[{grp_id}] {ts_name_str}"
+                        ts_copy["damage_scenario"] = scene_str
+                        
+                    flat_ts_list.append(ts_copy)
+                    
+    # Fallback to old format
+    if not flat_ts_list and raw_ts_data and "type" not in raw_ts_data[0]:
+        flat_ts_list = raw_ts_data
     
     def _create_node(label, name, x, y, desc="", node_type="default", threat_ids=None):
         uid = str(uuid.uuid4())
+        new_conn_id = str(uuid.uuid4())
         return {
             "id": uid,
             "nodeId": uid,
@@ -652,40 +732,60 @@ def generate_attack_trees_node(state: RAGState):
                 "label": label,
                 "nodeId": uid,
                 "nodeType": node_type,
-                "connections": [{"id": str(uuid.uuid4()), "type": "OR Gate"}],
+                "connections": [{"id": new_conn_id, "type": "OR Gate"}],
                 "style": {
-                    "backgroundColor": "transparent", "borderColor": "black", "borderStyle": "solid", "borderWidth": "2px",
-                    "color": "black", "fontFamily": "Inter", "fontSize": "16px", "fontStyle": "normal", "fontWeight": 500,
-                    "height": 60, "textAlign": "center", "textDecoration": "none", "width": 150
+                    "backgroundColor": "transparent", 
+                    "borderColor": "black", 
+                    "borderStyle": "solid", 
+                    "borderWidth": "2px",
+                    "color": "black", 
+                    "fontFamily": "Inter", 
+                    "fontSize": "16px", 
+                    "fontStyle": "normal", 
+                    "fontWeight": 500,
+                    "height": 60, 
+                    "textAlign": "center", 
+                    "textDecoration": "none", 
+                    "width": 150
                 }
             },
             "threat_ids": threat_ids or []
         }
 
-    for ts in ts_list:
+    for ts in flat_ts_list:
         nodes = []
         edges = []
         
-        # Prepare threat_ids list
-        # We need to find the rowId and other info from how Threat_scenarios was constructed
-        # For now we use the info available in ts
-        prop = ts.get("props", [{}])[0]
+        props_list = ts.get("props", [{}])
+        prop = props_list[0] if props_list else {}
+        
+        # Safely parse damage_scenario string
+        ds_str = ts.get("damage_scenario", "")
+        if "]" in ds_str:
+            d_parts = ds_str.split("]")
+            d_id = d_parts[0].strip("[")
+            d_scene = d_parts[1].strip() if len(d_parts) > 1 else ""
+        else:
+            d_id = ds_str
+            d_scene = ""
+            
         t_ids = [
             {
-                "damage_id": ts.get("damage_scenario", "").split("]")[0].strip("["),
-                "damage_scene": ts.get("damage_scenario", "").split("]")[1].strip() if "]" in ts.get("damage_scenario", "") else "",
+                "damage_id": d_id,
+                "damage_scene": d_scene,
                 "nodeId": ts.get("nodeId", ""),
                 "node_name": ts.get("node", ""),
                 "propId": prop.get("id", ""),
                 "prop_key": prop.get("key", 1),
                 "prop_name": prop.get("name", "Integrity"),
-                "rowId": ts.get("rowId", "") # This will be injected during evaluate stage or we can pre-generate it
+                "rowId": ts.get("rowId", "") 
             }
         ]
         
-        # Root Node
-        name_only = ts.get("name", "Attack").split("]")[-1].strip()
-        label = ts.get("name", "Attack")
+        ts_name_str = ts.get("name", "Attack")
+        name_only = ts_name_str.split("]")[-1].strip() if "]" in ts_name_str else ts_name_str
+        label = ts_name_str
+        
         root = _create_node(label, name_only, 1184, -113, desc="Attack scenario description", node_type="derived", threat_ids=t_ids)
         nodes.append(root)
         
@@ -701,66 +801,42 @@ def generate_attack_trees_node(state: RAGState):
     
     return {"attacks": attacks}
 
-def _match_node_label(node_name: str, valid_node_labels: dict):
-    """
-    Match a reference node name to a current-architecture node label.
-    Tries exact → substring → word-overlap strategies in order.
-    Returns (node_id, matched_label) or (None, None).
-    """
-    if not node_name:
-        return None, None
-    node_lower = node_name.lower().strip()
-
-    # 1. Exact match
-    if node_lower in valid_node_labels:
-        return valid_node_labels[node_lower], node_lower
-
-    # 2. Substring match (original behaviour)
-    for label, nid in valid_node_labels.items():
-        if node_lower in label or label in node_lower:
-            return nid, label
-
-    # 3. Word-level overlap — catches "Battery Pack ECU" ↔ "Battery Management"
-    node_words = set(node_lower.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
-    best_score, best_match = 0, None
-    for label, nid in valid_node_labels.items():
-        label_words = set(label.replace("-", " ").replace("_", " ").split()) - {"", "the", "and", "of"}
-        overlap = len(node_words & label_words)
-        if overlap > best_score:
-            best_score = overlap
-            best_match = (nid, label)
-
-    if best_match and best_score > 0:
-        return best_match
-
-    return None, None
 
 
 def damage_scenario_node(state: RAGState):
-    """AGENT 3: Focuses on Impact Ratings and Damage Scenarios."""
     from app.v1.rag.prompt import DAMAGE_PROMPT
     import copy
     query = state.get("user_query", "") or state.get("query", "")
 
-    # Check cache first
     cached = load_cache(query, "damage")
     if cached:
         return {"damage_details": cached}
 
     if not state.get("threats"): return {"damage_details": []}
-    
-    # ✅ FIX: Fetch reference data and remap existing damage scenarios
+
     from app.v1.rag.components import resolve_ecu, resolve_reference_report
     ecu_entry = resolve_ecu(query)
     reference_data = resolve_reference_report(ecu_entry, query)
-    
+
     arch = state.get("architecture", {})
     arch_nodes = arch.get("template", {}).get("nodes", arch.get("nodes", []))
-    
-    valid_node_labels = {n.get("data", {}).get("label", "").lower().strip(): n.get("id") 
-                        for n in arch_nodes if n.get("type") != "group"}
+    arch_edges = arch.get("template", {}).get("edges", arch.get("edges", []))
 
-    # Fallback: first available non-group node (used when no label match is found at all)
+    # ── Node label → id map (non-group nodes only) ──────────────────────────
+    valid_node_labels = {
+        n.get("data", {}).get("label", "").lower().strip(): n.get("id")
+        for n in arch_nodes if n.get("type") != "group"
+    }
+
+    # ── Edge label → id map (edges carry data.label like "CAN1", "CAN2") ───
+    valid_edge_labels = {}
+    for e in arch_edges:
+        e_data = e.get("data", {})
+        e_label = (e_data.get("label", "") if isinstance(e_data, dict) else "").lower().strip()
+        e_id = e.get("id", "")
+        if e_label and e_id:
+            valid_edge_labels[e_label] = e_id
+
     _fallback_label = next(iter(valid_node_labels), None)
     _fallback_id    = valid_node_labels.get(_fallback_label) if _fallback_label else None
 
@@ -773,115 +849,96 @@ def damage_scenario_node(state: RAGState):
                     remapped_losses = []
 
                     for loss in detail_copy.get("cyberLosses", []):
-                        node_name = loss.get("node", "")
+                        node_name    = loss.get("node", "")
+                        ref_node_id  = loss.get("nodeId", "")
+
+                        # ── Strategy 1: try nodes first ──────────────────────
                         matched_nid, matched_label = _match_node_label(node_name, valid_node_labels)
 
+                        # ── Strategy 2: if the reference nodeId is an edge ID
+                        #    (reactflow__edge-…), try matching against edge labels ──
+                        if not matched_nid and ref_node_id.startswith("reactflow__edge"):
+                            matched_nid, matched_label = _match_node_label(node_name, valid_edge_labels)
+
                         if matched_nid:
-                            # Best-case: found a matching architecture node
                             loss["nodeId"] = matched_nid
                             loss["node"]   = matched_label
                         elif _fallback_id:
-                            # Fallback: map to the first available node so the
-                            # scenario is never silently dropped
                             loss["nodeId"] = _fallback_id
                             loss["node"]   = _fallback_label
-                            print(f"  ⚠️  No match for '{node_name}' — assigned to fallback '{_fallback_label}'")
-                        # else: keep original node/nodeId intact (better than dropping)
 
                         loss["id"] = str(uuid.uuid4())
                         remapped_losses.append(loss)
 
-                    # ✅ KEY FIX: ALWAYS include the scenario regardless of whether
-                    # any loss matched. Dropping scenarios silently was the bug.
                     if remapped_losses:
                         detail_copy["cyberLosses"] = remapped_losses
                     detail_copy["_id"] = str(uuid.uuid4())
                     existing_scenarios.append(detail_copy)
 
-    print(f"✅ Found {len(existing_scenarios)} valid existing damage scenarios from reference.")
-
-    print("Assessing damage scenarios...")
     tmpl = jinja2.Template(DAMAGE_PROMPT)
     prompt = tmpl.render(
         question=state.get("user_query", "Automotive ECU System"),
         threats=json.dumps(state["threats"], indent=2),
         architecture=json.dumps(state["architecture"], indent=2)
     )
-    
-    # ✅ FIX: Tell LLM to generate extras if we have existing ones
+
     if existing_scenarios:
-        prompt += f"\n\n### EXISTING SCENARIOS (DO NOT REGENERATE THESE):\n{json.dumps(existing_scenarios, indent=2)}\n\n"
+        prompt += "\n\n### EXISTING SCENARIOS (DO NOT REGENERATE THESE):\n"
+        prompt += json.dumps(existing_scenarios, indent=2)
+        prompt += "\n\n"
         target_extras = max(3, 10 - len(existing_scenarios))
-        prompt += f"Generate {target_extras} EXTRA damage scenarios covering different components. Return ONLY the new scenarios in your JSON output.\n"
-    
+        prompt += f"Generate {target_extras} EXTRA damage scenarios covering different components. "
+        prompt += "Return ONLY the new scenarios in your JSON output.\n"
+
     result = safe_generate(prompt, "DamageAnalyst")
     raw_json = result["replies"][0] if result["replies"] else "{}"
-    
-    # Log the RAG and LLM activity
+
     log_prompt("damage_scenario_node", state.get("documents", []), prompt, raw_json)
-    
-    # Cooldown
+
     time.sleep(10)
     try:
-        cleaned = re.sub(r"^```[a-z]*\n?", "", raw_json.strip(), flags=re.MULTILINE)
-        cleaned = re.sub(r"```$", "", cleaned.strip())
+        cleaned = clean_json_response(raw_json)
         damage_data = json.loads(cleaned)
-        
-        # Flexibly find Details or full structure
+
         if "Damage_scenarios" in damage_data:
             details = damage_data["Damage_scenarios"]
         else:
             details = damage_data.get("Details", damage_data.get("details", damage_data.get("damage_details", [])))
-            
+
         if not details and isinstance(damage_data, list):
             details = damage_data
-            
+
         if not details:
-            print(f"DEBUG: Raw Damage Response: {raw_json[:300]}")
-            print(f" Damage Analyst FAIL: No scenarios found in JSON.")
             details = []
-        else:
-            print(f"Damage Analyst SUCCESS: Found {len(details)} extra scenarios.")
-            
-        # ✅ FIX: Combine existing scenarios with the newly generated extras
+
         combined_details = existing_scenarios + details
-        
+
         save_cache(query, "damage", combined_details)
         return {"damage_details": combined_details}
-        
+
     except Exception as e:
-        print(f"DEBUG: Parsing error: {e}")
-        print(f"DEBUG: Raw Damage Response: {raw_json[:500]}")
-        
-        # If LLM failed but we have existing scenarios, return them anyway!
         if existing_scenarios:
-            print(f"Returning {len(existing_scenarios)} existing damage scenarios despite LLM failure.")
             save_cache(query, "damage", existing_scenarios)
             return {"damage_details": existing_scenarios}
-            
+
         return {"damage_details": []}
 
 
 def evaluate(state: RAGState):
-    """Combine all agent outputs into the final TARA JSON and evaluate."""
-    print("  📝 Combining and evaluating...")
-
-    # Group threat scenarios by damage scenario ID (nodeIds remapped later)
-    ts_list = state.get("threat_scenarios", [])
-
-    # Assemble final JSON
+    # ── DEFENSIVE EXTRACTION of Architecture ──
     assets_data = state.get("architecture", {})
-    assets_list = []
-    
-    if assets_data:
-        if isinstance(assets_data, list): assets_list = assets_data
-        else: assets_list = [assets_data]
+    if not assets_data:
+        assets_data = {"template": {"nodes": [], "edges": []}, "Details": []}
 
-    # Deterministic metadata and structure fix for Assets
+    assets_list = []
+    if isinstance(assets_data, list):
+        assets_list = assets_data
+    else:
+        assets_list = [assets_data]
+
     mid = "698397514b57b8f24ed40a43"
     uid = "66ce823d95a055635c0ae0ae"
-    
-    # 1. PRE-PROCESS: Ensure all assets have a 'template' key before mapping
+
     unified_assets = []
     for asset in assets_list:
         if isinstance(asset, dict) and "Assets" in asset:
@@ -890,6 +947,9 @@ def evaluate(state: RAGState):
             else: unified_assets.append(sub)
         elif isinstance(asset, dict):
             unified_assets.append(asset)
+
+    if not unified_assets:
+        unified_assets = [{"template": {"nodes": [], "edges": []}, "Details": []}]
 
     for asset in unified_assets:
         if "template" not in asset or not asset["template"]:
@@ -900,12 +960,11 @@ def evaluate(state: RAGState):
             asset.pop("nodes", None)
             asset.pop("edges", None)
 
-    # ── PROPAGATE securityProperties from Details to nodes ──
     for asset in unified_assets:
         details = asset.get("Details", [])
         if not isinstance(details, list):
             details = []
-        
+
         detail_props_map = {}
         for detail in details:
             if not isinstance(detail, dict):
@@ -923,25 +982,26 @@ def evaluate(state: RAGState):
                         sec_props.append(p)
             if nid and sec_props:
                 detail_props_map[nid] = sec_props
-        
+
         nodes = asset.get("template", {}).get("nodes", [])
         if not isinstance(nodes, list):
             nodes = []
-        
+
         for node in nodes:
             if not isinstance(node, dict):
                 continue
             nid = node.get("id")
             node_type = node.get("type", "default")
-            
+
             if nid in detail_props_map:
                 node["properties"] = detail_props_map[nid]
             elif node_type != "group":
                 if "properties" not in node or not node.get("properties"):
-                    node["properties"] = ["Integrity", "Confidentiality", "Authenticity", 
-                                          "Authorization", "Availability", "Non-repudiation"]
-            
-            # Normalize properties
+                    node["properties"] = [
+                        "Integrity", "Confidentiality", "Authenticity",
+                        "Authorization", "Availability", "Non-repudiation"
+                    ]
+
             properties = node.get("properties", [])
             if not isinstance(properties, list):
                 properties = []
@@ -952,13 +1012,11 @@ def evaluate(state: RAGState):
                     if name: clean_props.append(name)
                 elif isinstance(p, str) and p:
                     clean_props.append(p)
-            node["properties"] = clean_props if clean_props else ["Integrity", "Confidentiality", 
-                                                                   "Authenticity", "Authorization", 
-                                                                   "Availability", "Non-repudiation"]
-        
-        print(f"  ✅ Propagated properties for {len(detail_props_map)} nodes from Details")
+            node["properties"] = clean_props if clean_props else [
+                "Integrity", "Confidentiality", "Authenticity",
+                "Authorization", "Availability", "Non-repudiation"
+            ]
 
-    # 2. Standardize Node IDs and Create Deep Mapping
     node_id_map = {}
     label_id_map = {}
     for asset in unified_assets:
@@ -969,11 +1027,11 @@ def evaluate(state: RAGState):
             if not isinstance(node, dict):
                 continue
             old_id = node.get("id")
-            label = node.get("data", {})
-            if isinstance(label, dict):
-                label = label.get("label")
+            node_data = node.get("data", {})
+            label = node_data.get("label") if isinstance(node_data, dict) else None
+
             new_uuid = str(uuid.uuid4())
-            if old_id: 
+            if old_id:
                 node_id_map[old_id] = new_uuid
             if label:
                 label_id_map[label] = new_uuid
@@ -983,57 +1041,63 @@ def evaluate(state: RAGState):
             if "data" in node and isinstance(node["data"], dict):
                 node["data"]["nodeId"] = new_uuid
 
-    # 2b. Remap parentId references to new UUIDs
     for asset in unified_assets:
         for node in asset.get("template", {}).get("nodes", []):
             if not isinstance(node, dict):
                 continue
             old_pid = node.get("parentId")
+
+            final_pid = None
             if old_pid:
-                node["parentId"] = node_id_map.get(
-                    old_pid,
-                    label_id_map.get(old_pid,
-                    label_id_map.get(str(old_pid).lower(),
-                    old_pid)))
-            final_pid = node.get("parentId")
+                if old_pid in node_id_map:
+                    final_pid = node_id_map[old_pid]
+                elif old_pid in label_id_map:
+                    final_pid = label_id_map[old_pid]
+                elif str(old_pid).lower() in label_id_map:
+                    final_pid = label_id_map[str(old_pid).lower()]
+                else:
+                    final_pid = old_pid
+
+            node["parentId"] = final_pid
+
             valid_ids = [n.get("id") for n in asset.get("template", {}).get("nodes", []) if isinstance(n, dict)]
             if final_pid and final_pid not in valid_ids:
                 node["parentId"] = None
 
-    # 3. Final Styling and Metadata
     for asset in unified_assets:
         asset["_id"] = asset.get("_id", str(uuid.uuid4()))
         asset["user_id"] = uid
         asset["model_id"] = mid
         asset["asset_name"] = asset.get("asset_name", None)
         asset["asset_properties"] = asset.get("asset_properties", None)
-        
+
         nested_details = asset.get("template", {}).pop("details", None) or asset.get("template", {}).pop("Details", None)
         if nested_details and not asset.get("Details"):
             asset["Details"] = nested_details
-            
+
         nodes = asset.get("template", {}).get("nodes", [])
         if not isinstance(nodes, list):
             nodes = []
-        
+
         group_ids = {n.get("id") for n in nodes if isinstance(n, dict) and n.get("type") == "group"}
         child_counters = {}
-        
+
         for i, node in enumerate(nodes):
             if not isinstance(node, dict):
                 continue
             if "data" not in node or not isinstance(node.get("data"), dict):
                 node["data"] = {}
             ntype = node.get("type", "default")
-            
+
             if ntype == "group":
                 default_w, default_h = 800, 500
             elif ntype == "data":
-                default_w, default_h = 50, 30
+                default_w, default_h = 100, 40
             else:
-                default_w, default_h = 150, 60
-            
+                default_w, default_h = 160, 40
+
             pid = node.get("parentId")
+
             if "position" not in node:
                 if ntype == "group":
                     node["position"] = {"x": -96.0, "y": -44.0}
@@ -1042,24 +1106,26 @@ def evaluate(state: RAGState):
                     col = ci % 4
                     row = ci // 4
                     node["position"] = {"x": 20 + (col * 200), "y": 80 + (row * 150)}
+                    node["extent"] = "parent"
                     child_counters[pid] = ci + 1
                 else:
                     col = i % 3
                     node["position"] = {"x": 100 + (col * 350), "y": 100 + 300}
-            
+
             node["positionAbsolute"] = node.get("positionAbsolute", node.get("position", {"x": 0, "y": 0}))
             node["dragging"] = node.get("dragging", False)
             node["resizing"] = node.get("resizing", False)
             node["selected"] = node.get("selected", False)
             node["isAsset"] = node.get("isAsset", False)
-            
+
             if ntype == "group":
                 node["zIndex"] = 0
-            
-            # Properties normalization
+
             if "properties" not in node or not isinstance(node.get("properties"), list):
-                node["properties"] = ["Integrity", "Confidentiality", "Authenticity", 
-                                      "Authorization", "Availability", "Non-repudiation"]
+                node["properties"] = [
+                    "Integrity", "Confidentiality", "Authenticity",
+                    "Authorization", "Availability", "Non-repudiation"
+                ]
             else:
                 clean_props = []
                 for p in node["properties"]:
@@ -1067,10 +1133,11 @@ def evaluate(state: RAGState):
                         clean_props.append(p.get("name", p.get("value", "Integrity")))
                     elif isinstance(p, str):
                         clean_props.append(p)
-                node["properties"] = clean_props if clean_props else ["Integrity", "Confidentiality", 
-                                                                       "Authenticity", "Authorization", 
-                                                                       "Availability", "Non-repudiation"]
-            
+                node["properties"] = clean_props if clean_props else [
+                    "Integrity", "Confidentiality", "Authenticity",
+                    "Authorization", "Availability", "Non-repudiation"
+                ]
+
             if "style" not in node.get("data", {}):
                 bg = "#dadada" if ntype == "group" else ("#e3e896" if ntype == "data" else "#FFFFFF")
                 node["data"]["style"] = {
@@ -1088,32 +1155,74 @@ def evaluate(state: RAGState):
                     "textDecoration": "none",
                     "width": node.get("width", default_w)
                 }
-            
+
             node["data"]["style"]["height"] = node.get("height", default_h)
             node["data"]["style"]["width"] = node.get("width", default_w)
             node["height"] = node["data"]["style"]["height"]
             node["width"] = node["data"]["style"]["width"]
             node["style"] = {"height": node["height"], "width": node["width"]}
-        
-        # Edges
+
+        for node in nodes:
+            if isinstance(node, dict) and node.get("type") == "group":
+                nid = node.get("id")
+                count = child_counters.get(nid, 0)
+                if count > 0:
+                    cols = min(count, 4)
+                    rows = (count - 1) // 4 + 1
+                    min_w = 40 + (cols * 200)
+                    min_h = 80 + (rows * 150)
+
+                    node["data"]["style"]["width"] = max(node["data"]["style"].get("width", 800), min_w)
+                    node["data"]["style"]["height"] = max(node["data"]["style"].get("height", 500), min_h)
+                    node["width"] = node["data"]["style"]["width"]
+                    node["height"] = node["data"]["style"]["height"]
+                    node["style"] = {"height": node["height"], "width": node["width"]}
+
         edges = asset.get("template", {}).get("edges", [])
         if not isinstance(edges, list):
             edges = []
-        
+
         for edge in edges:
             if not isinstance(edge, dict):
                 continue
-            src = node_id_map.get(edge.get("source"), label_id_map.get(edge.get("source"), edge.get("source", "")))
-            tgt = node_id_map.get(edge.get("target"), label_id_map.get(edge.get("target"), edge.get("target", "")))
+
+            src_raw = edge.get("source", "")
+            if src_raw in node_id_map:
+                src = node_id_map[src_raw]
+            elif src_raw in label_id_map:
+                src = label_id_map[src_raw]
+            else:
+                src = src_raw
+
+            tgt_raw = edge.get("target", "")
+            if tgt_raw in node_id_map:
+                tgt = node_id_map[tgt_raw]
+            elif tgt_raw in label_id_map:
+                tgt = label_id_map[tgt_raw]
+            else:
+                tgt = tgt_raw
+
             edge["source"] = src
             edge["target"] = tgt
             edge["sourceHandle"] = edge.get("sourceHandle", "b")
             edge["targetHandle"] = edge.get("targetHandle", "right")
-            edge["id"] = f"reactflow__edge-{src}{edge['sourceHandle']}-{tgt}{edge['targetHandle']}"
+
+            sh = edge["sourceHandle"]
+            th = edge["targetHandle"]
+
+            # ── NEW: capture old edge ID before overwriting so we can remap
+            #         cyberLoss nodeIds that point to edges ──────────────────
+            old_edge_id = edge.get("id", "")
+            new_edge_id = f"reactflow__edge-{src}{sh}-{tgt}{th}"
+            edge["id"] = new_edge_id
+            if old_edge_id:
+                edge_id_map[old_edge_id] = new_edge_id
+            # ─────────────────────────────────────────────────────────────────
+
             edge["type"] = edge.get("type", "step")
             edge["animated"] = edge.get("animated", True)
             edge["selected"] = edge.get("selected", False)
-            
+
             if "properties" not in edge or not isinstance(edge.get("properties"), list):
                 edge["properties"] = ["Integrity"]
             else:
@@ -1124,7 +1233,7 @@ def evaluate(state: RAGState):
                     elif isinstance(p, str):
                         clean_props.append(p)
                 edge["properties"] = clean_props if clean_props else ["Integrity"]
-            
+
             if "data" not in edge or not isinstance(edge.get("data"), dict):
                 edge["data"] = {}
             if "label" not in edge["data"]:
@@ -1142,7 +1251,6 @@ def evaluate(state: RAGState):
                 "strokeDasharray": "0", "strokeWidth": 2
             })
 
-        # Details handling
         if "Details" not in asset or not isinstance(asset.get("Details"), list) or not asset["Details"]:
             asset["Details"] = []
             for node in asset.get("template", {}).get("nodes", []):
@@ -1152,10 +1260,15 @@ def evaluate(state: RAGState):
                     props = node.get("properties", ["Integrity"])
                     if not isinstance(props, list):
                         props = ["Integrity"]
+
+                    node_data = node.get("data", {})
+                    node_label = node_data.get("label", "Unknown") if isinstance(node_data, dict) else "Unknown"
+                    node_desc = node_data.get("description", None) if isinstance(node_data, dict) else None
+
                     asset["Details"].append({
                         "nodeId": node.get("id"),
-                        "name": node.get("data", {}).get("label", "Unknown") if isinstance(node.get("data"), dict) else "Unknown",
-                        "desc": node.get("data", {}).get("description", None) if isinstance(node.get("data"), dict) else None,
+                        "name": node_label,
+                        "desc": node_desc,
                         "type": node.get("type", "default"),
                         "props": [{"name": p, "id": str(uuid.uuid4())} for p in props if isinstance(p, str)]
                     })
@@ -1163,17 +1276,22 @@ def evaluate(state: RAGState):
             for detail in asset["Details"]:
                 if not isinstance(detail, dict):
                     continue
-                detail["nodeId"] = node_id_map.get(
-                    detail.get("nodeId"),
-                    label_id_map.get(detail.get("nodeId"), detail.get("nodeId"))
-                )
+
+                nid_raw = detail.get("nodeId", "")
+                if nid_raw in node_id_map:
+                    detail["nodeId"] = node_id_map[nid_raw]
+                elif nid_raw in label_id_map:
+                    detail["nodeId"] = label_id_map[nid_raw]
+                else:
+                    detail["nodeId"] = nid_raw
+
                 if "props" not in detail or not isinstance(detail.get("props"), list) or not detail["props"]:
                     sec_props = detail.get("securityProperties", [])
                     if isinstance(sec_props, list) and sec_props:
                         detail["props"] = [{"name": p, "id": str(uuid.uuid4())} for p in sec_props if isinstance(p, str)]
                     else:
                         detail["props"] = [{"name": "Integrity", "id": str(uuid.uuid4())}]
-                
+
                 for prop in detail.get("props", []):
                     if not isinstance(prop, dict):
                         continue
@@ -1181,23 +1299,39 @@ def evaluate(state: RAGState):
                     if not re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', pid):
                         prop["id"] = str(uuid.uuid4())
 
-    # ── DATA NORMALIZATION ──
+    # ── NEW: edge_id_map is populated during the asset/edge loop above ──────
+    # (declared here in the outer scope so _remap can close over it)
+    # NOTE: edge_id_map is initialised BEFORE the asset loop below; the loop
+    # above populates it as a side-effect of rebuilding edge["id"].
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _remap(old_nid):
         if not old_nid:
             return old_nid
         if isinstance(old_nid, dict):
             old_nid = old_nid.get("id", old_nid.get("nodeId", ""))
-        return node_id_map.get(old_nid, label_id_map.get(old_nid, label_id_map.get(str(old_nid).lower(), old_nid)))
 
-    # Process Threats (Raw) - ADD SAFETY CHECKS
+        if old_nid in node_id_map:
+            return node_id_map[old_nid]
+        if old_nid in label_id_map:
+            return label_id_map[old_nid]
+        if str(old_nid).lower() in label_id_map:
+            return label_id_map[str(old_nid).lower()]
+        # ── NEW: also remap old edge IDs to their rebuilt counterparts ───────
+        if old_nid in edge_id_map:
+            return edge_id_map[old_nid]
+        # ─────────────────────────────────────────────────────────────────────
+
+        return old_nid
+
     raw_threats = state.get("threats", [])
     if not isinstance(raw_threats, list):
         raw_threats = []
-    
+
     raw_damage_details = state.get("damage_details", [])
     if not isinstance(raw_damage_details, list):
         raw_damage_details = []
-    
+
     for i, t in enumerate(raw_threats):
         if not isinstance(t, dict):
             continue
@@ -1214,11 +1348,10 @@ def evaluate(state: RAGState):
                 if dd.get("Description"):
                     t["description"] = dd["Description"]
 
-    # Process Damage Details (Deep)
     for block in raw_damage_details:
         if not isinstance(block, dict):
             continue
-        
+
         nested_items = []
         if block.get("type") == "Derived":
             nested_items = block.get("Derivations", [])
@@ -1226,10 +1359,10 @@ def evaluate(state: RAGState):
             nested_items = block.get("Details", [])
         else:
             nested_items = [block]
-        
+
         if not isinstance(nested_items, list):
             continue
-        
+
         for item in nested_items:
             if not isinstance(item, dict):
                 continue
@@ -1243,100 +1376,128 @@ def evaluate(state: RAGState):
                         if not cl.get("id") or not re.match(r'^[0-9a-f]{8}-', str(cl.get("id", ""))):
                             cl["id"] = str(uuid.uuid4())
 
-    # Process Threat Scenarios
-    ts_scenarios = state.get("threat_scenarios", [])
-    if not isinstance(ts_scenarios, list):
-        ts_scenarios = []
-    
-    for ts in ts_scenarios:
-        if not isinstance(ts, dict):
-            continue
-        ts["nodeId"] = _remap(ts.get("nodeId"))
-        for p in ts.get("props", []):
-            if not isinstance(p, dict):
-                continue
-            if not p.get("id") or not re.match(r'^[0-9a-f]{8}-', str(p.get("id", ""))):
-                p["id"] = str(uuid.uuid4())
-    
-    # ── EXTRACT User-defined Scenarios ──
-    user_defined_scenarios = []
-    for block in raw_damage_details:
-        if isinstance(block, dict) and block.get("type") == "User-defined":
-            details = block.get("Details", [])
-            if isinstance(details, list):
-                user_defined_scenarios = details
-            break
-    
-    # If the user-defined wrapper wasn't returned, fallback to the raw list
-    if not user_defined_scenarios:
-        user_defined_scenarios = raw_damage_details if isinstance(raw_damage_details, list) else []
+    raw_ts_data = state.get("threat_scenarios", [])
+    derived_ts_details = []
+    user_defined_ts_details = []
 
-    # Build threat_scenarios_details
-    threat_scenarios_details = []
-    grouped_ts = {}
-    
-    for ts in ts_scenarios:
-        if not isinstance(ts, dict):
-            continue
-        ds_ref = ts.get("damage_scenario", "")
-        match = re.search(r"\[(DS\d+)\]", ds_ref)
-        ds_id = match.group(1) if match else "Global"
-        if ds_id not in grouped_ts:
-            grouped_ts[ds_id] = []
-        grouped_ts[ds_id].append(ts)
-        
-    for ds_id, ts_items in grouped_ts.items():
-        node_grouping = {}
-        ds_display_name = ""
-        
-        for ts in ts_items:
-            if not isinstance(ts, dict):
-                continue
-            nid = _remap(ts.get("nodeId", ""))
-            if nid == "unknown" or not nid:
-                label = ts.get("node", "")
-                nid = node_id_map.get(label, label_id_map.get(label, nid))
-                
-            node_name = ts.get("node", "Component")
-            if not ds_display_name:
-                ds_display_name = ts.get("name", "Threat Scenario").split(']')[-1].strip() if ']' in ts.get("name", "") else ts.get("name", "Threat Scenario")
-                
-            if nid not in node_grouping:
-                node_grouping[nid] = {
-                    "node": node_name,
-                    "nodeId": nid,
-                    "props": [],
-                    "name": ds_display_name
-                }
-            
-            for p in ts.get("props", []):
-                if not isinstance(p, dict):
+    if isinstance(raw_ts_data, list):
+        for block in raw_ts_data:
+            if not isinstance(block, dict): continue
+            btype = block.get("type", "").lower()
+            if btype == "derived":
+                derived_ts_details = block.get("Details", [])
+            elif btype == "user-defined":
+                user_defined_ts_details = block.get("Details", [])
+
+    if derived_ts_details:
+        seen_rowids = set()
+        dedup_derived = []
+        for detail in derived_ts_details:
+            rowid = detail.get("rowId")
+            if not rowid or rowid not in seen_rowids:
+                if rowid:
+                    seen_rowids.add(rowid)
+                dedup_derived.append(detail)
+        derived_ts_details = dedup_derived
+        print(f"  ✅ Derived threat scenarios deduplicated: {len(derived_ts_details)} unique rows")
+
+    if user_defined_ts_details:
+        seen_ids = set()
+        seen_names = set()
+        dedup_user = []
+        for detail in user_defined_ts_details:
+            threat_id = detail.get("id", "")
+            threat_name = detail.get("name", "")
+            is_duplicate = (threat_id and threat_id in seen_ids) or (threat_name and threat_name in seen_names)
+            if not is_duplicate:
+                if threat_id:
+                    seen_ids.add(threat_id)
+                if threat_name:
+                    seen_names.add(threat_name)
+                dedup_user.append(detail)
+        user_defined_ts_details = dedup_user
+        print(f"  ✅ User-defined threat scenarios deduplicated: {len(user_defined_ts_details)} unique scenarios")
+
+    if not derived_ts_details and isinstance(raw_ts_data, list) and len(raw_ts_data) > 0:
+        grouped_ts = {}
+        for ts in raw_ts_data:
+            if not isinstance(ts, dict): continue
+            ds_ref = ts.get("damage_scenario", "")
+            match = re.search(r"\[(DS\d+)\]", ds_ref)
+            ds_id = match.group(1) if match else "Global"
+            if ds_id not in grouped_ts: grouped_ts[ds_id] = []
+            grouped_ts[ds_id].append(ts)
+
+        for ds_id, ts_items in grouped_ts.items():
+            node_grouping = {}
+            ds_display_name = ""
+
+            for ts in ts_items:
+                if not isinstance(ts, dict):
                     continue
-                p_name = p.get("name", "Integrity")
-                if not any(ep["name"] == p_name for ep in node_grouping[nid]["props"]):
-                    pid = p.get("id", str(uuid.uuid4()))
-                    if not re.match(r'^[0-9a-f]{8}-', str(pid)):
-                        pid = str(uuid.uuid4())
-                    node_grouping[nid]["props"].append({
-                        "id": pid,
-                        "is_risk_added": p.get("is_risk_added", True),
-                        "name": p_name,
-                        "isSelected": p.get("isSelected", True),
-                        "key": len(node_grouping[nid]["props"]) + 1
-                    })
-        
-        if node_grouping:
-            threat_scenarios_details.append({
-                "rowId": str(uuid.uuid4()),
-                "id": ds_id,
-                "Details": list(node_grouping.values())
-            })
+                nid = _remap(ts.get("nodeId", ""))
+                if nid == "unknown" or not nid:
+                    label = ts.get("node", "")
+                    nid = node_id_map.get(label, label_id_map.get(label, nid))
 
-    # ── BUILD Assets[0].Details ──
+                node_name = ts.get("node", "Component")
+                if not ds_display_name:
+                    ts_name_str = ts.get("name", "Threat Scenario")
+                    if "]" in ts_name_str:
+                        ds_display_name = ts_name_str.split("]")[-1].strip()
+                    else:
+                        ds_display_name = ts_name_str
+
+                if nid not in node_grouping:
+                    node_grouping[nid] = {
+                        "node": node_name,
+                        "nodeId": nid,
+                        "props": [],
+                        "name": ds_display_name
+                    }
+
+                for p in ts.get("props", []):
+                    if not isinstance(p, dict):
+                        continue
+                    p_name = p.get("name", "Integrity")
+                    if not any(ep["name"] == p_name for ep in node_grouping[nid]["props"]):
+                        pid = p.get("id", str(uuid.uuid4()))
+                        if not re.match(r'^[0-9a-f]{8}-', str(pid)):
+                            pid = str(uuid.uuid4())
+                        node_grouping[nid]["props"].append({
+                            "id": pid,
+                            "is_risk_added": p.get("is_risk_added", True),
+                            "name": p_name,
+                            "isSelected": p.get("isSelected", True),
+                            "key": len(node_grouping[nid]["props"]) + 1
+                        })
+
+            if node_grouping:
+                derived_ts_details.append({
+                    "rowId": str(uuid.uuid4()),
+                    "id": ds_id,
+                    "Details": list(node_grouping.values())
+                })
+
+    threat_scenarios_details = derived_ts_details
+
+    for row in derived_ts_details:
+        if "Details" in row:
+            for item in row["Details"]:
+                item["nodeId"] = _remap(item.get("nodeId"))
+                for p in item.get("props", []):
+                    if not re.match(r'^[0-9a-f]{8}-', str(p.get("id", ""))):
+                        p["id"] = str(uuid.uuid4())
+
+    for dd in user_defined_ts_details:
+        if "threat_ids" in dd:
+            for t_id in dd["threat_ids"]:
+                t_id["nodeId"] = _remap(t_id.get("nodeId"))
+
     first_asset = unified_assets[0] if unified_assets else {}
     if not isinstance(first_asset, dict):
         first_asset = {}
-    
+
     if "Details" not in first_asset or not isinstance(first_asset.get("Details"), list) or not first_asset["Details"]:
         asset_details = []
         for node in first_asset.get("template", {}).get("nodes", []):
@@ -1346,9 +1507,13 @@ def evaluate(state: RAGState):
                 props = node.get("properties", ["Integrity"])
                 if not isinstance(props, list):
                     props = ["Integrity"]
+
+                node_data = node.get("data", {})
+                node_label = node_data.get("label", "Unknown") if isinstance(node_data, dict) else "Unknown"
+
                 asset_details.append({
                     "nodeId": node.get("id"),
-                    "name": node.get("data", {}).get("label", "Unknown") if isinstance(node.get("data"), dict) else "Unknown",
+                    "name": node_label,
                     "desc": None,
                     "type": node.get("type", "default"),
                     "props": [{"name": p, "id": str(uuid.uuid4())} for p in props if isinstance(p, str)]
@@ -1359,16 +1524,19 @@ def evaluate(state: RAGState):
             props = edge.get("properties", ["Integrity"])
             if not isinstance(props, list):
                 props = ["Integrity"]
+
+            edge_data = edge.get("data", {})
+            edge_label = edge_data.get("label", "Connection") if isinstance(edge_data, dict) else "Connection"
+
             asset_details.append({
                 "nodeId": edge.get("id", ""),
-                "name": edge.get("data", {}).get("label", "Connection") if isinstance(edge.get("data"), dict) else "Connection",
+                "name": edge_label,
                 "desc": None,
                 "type": "step",
                 "props": [{"name": p, "id": str(uuid.uuid4())} for p in props if isinstance(p, str)]
             })
         first_asset["Details"] = asset_details
 
-    # ── BUILD Damage_scenarios.Derivations ──
     ds_derivations = []
     ds_counter = 1
     for detail in first_asset.get("Details", []):
@@ -1377,11 +1545,15 @@ def evaluate(state: RAGState):
         for prop in detail.get("props", []):
             if not isinstance(prop, dict):
                 continue
+
+            prop_name = prop.get("name", "Integrity")
+            detail_name = detail.get("name", "Component")
+
             ds_derivations.append({
                 "id": f"DS{ds_counter:03}",
-                "task": f"Check for DS due to the loss of {prop.get('name', 'Integrity')} for {detail.get('name', 'Component')}",
-                "name": f"DS due to the loss of {prop.get('name', 'Integrity')} for {detail.get('name', 'Component')}",
-                "loss": f"loss of {prop.get('name', 'Integrity')}",
+                "task": f"Check for DS due to the loss of {prop_name} for {detail_name}",
+                "name": f"DS due to the loss of {prop_name} for {detail_name}",
+                "loss": f"loss of {prop_name}",
                 "asset": False,
                 "damageScene": [],
                 "nodeId": detail.get("nodeId", ""),
@@ -1389,7 +1561,6 @@ def evaluate(state: RAGState):
             })
             ds_counter += 1
 
-    # ── BUILD final output ──
     reordered_assets = []
     for asset in unified_assets:
         if not isinstance(asset, dict):
@@ -1406,15 +1577,25 @@ def evaluate(state: RAGState):
         reordered_assets.append(ordered)
     unified_assets = reordered_assets
 
-    # ── Build safe user-defined details ──
+    user_defined_ds_details = []
+    for block in raw_damage_details:
+        if isinstance(block, dict) and block.get("type") == "User-defined":
+            details = block.get("Details", [])
+            if isinstance(details, list):
+                user_defined_ds_details = details
+            break
+
+    if not user_defined_ds_details:
+        user_defined_ds_details = raw_damage_details if isinstance(raw_damage_details, list) else []
+
     safe_user_defined = []
-    for i, dd in enumerate(user_defined_scenarios if isinstance(user_defined_scenarios, list) else []):
+    for i, dd in enumerate(user_defined_ds_details):
         if not isinstance(dd, dict):
             continue
         cyber_losses = dd.get("cyberLosses", dd.get("cyberlosses", []))
         if not isinstance(cyber_losses, list):
             cyber_losses = []
-        
+
         safe_losses = []
         for cl in cyber_losses:
             if not isinstance(cl, dict):
@@ -1427,14 +1608,18 @@ def evaluate(state: RAGState):
                 "node": cl.get("node", "Component"),
                 "nodeId": _remap(cl.get("nodeId", ""))
             })
-        
+
         impacts = dd.get("impacts", {})
         if not isinstance(impacts, dict):
             impacts = {}
-        
+
+        ds_name = dd.get("Name", dd.get("name", ""))
+        if not ds_name:
+            ds_name = f"Damage Scenario DS{i+1:03}"
+
         safe_user_defined.append({
             "Description": dd.get("Description", dd.get("description", "")),
-            "Name": dd.get("Name", dd.get("name", f"Damage Scenario DS{i+1:03}")),
+            "Name": ds_name,
             "cyberLosses": safe_losses,
             "impacts": {
                 "Financial Impact": impacts.get("Financial Impact", "Severe"),
@@ -1492,11 +1677,17 @@ def evaluate(state: RAGState):
                 "type": "derived",
                 "Details": threat_scenarios_details,
                 "user_id": uid
+            },
+            {
+                "_id": str(uuid.uuid4()),
+                "model_id": mid,
+                "type": "User-defined",
+                "Details": user_defined_ts_details,
+                "user_id": uid
             }
         ]
     }
 
-    # Post-processing to link rowId in Attacks
     try:
         threat_to_rowid = {}
         for block in final_output["Threat_scenarios"][0]["Details"]:
@@ -1516,16 +1707,25 @@ def evaluate(state: RAGState):
             for node in scene.get("templates", {}).get("nodes", []):
                 if not isinstance(node, dict):
                     continue
-                node["nodeId"] = node_id_map.get(node.get("nodeId"), label_id_map.get(node.get("nodeId"), node.get("nodeId")))
+
+                n_id = node.get("nodeId", "")
+                node["nodeId"] = node_id_map.get(n_id, label_id_map.get(n_id, n_id))
+
                 if "data" in node and isinstance(node["data"], dict):
-                    node["data"]["nodeId"] = node_id_map.get(node["data"].get("nodeId"), label_id_map.get(node["data"].get("nodeId"), node["data"].get("nodeId")))
+                    d_nid = node["data"].get("nodeId", "")
+                    node["data"]["nodeId"] = node_id_map.get(d_nid, label_id_map.get(d_nid, d_nid))
 
                 for t_id_ref in node.get("threat_ids", []):
                     if not isinstance(t_id_ref, dict):
                         continue
-                    t_id_ref["nodeId"] = node_id_map.get(t_id_ref.get("nodeId"), label_id_map.get(t_id_ref.get("nodeId"), t_id_ref.get("nodeId")))
-                    
-                    key = f"{t_id_ref.get('nodeId', '')}_{t_id_ref.get('prop_name', '')}"
+
+                    t_nid = t_id_ref.get("nodeId", "")
+                    t_id_ref["nodeId"] = node_id_map.get(t_nid, label_id_map.get(t_nid, t_nid))
+
+                    t_nid_mapped = t_id_ref.get("nodeId", "")
+                    t_pname = t_id_ref.get("prop_name", "")
+                    key = f"{t_nid_mapped}_{t_pname}"
+
                     if key in threat_to_rowid:
                         t_id_ref["rowId"] = threat_to_rowid[key]
     except Exception as e:
@@ -1536,7 +1736,7 @@ def evaluate(state: RAGState):
     first_asset = unified_assets[0] if unified_assets else {}
     nodes = first_asset.get("template", {}).get("nodes", []) if isinstance(first_asset, dict) else []
     derivations = ds_derivations
-    threats = ts_list
+    threats = state.get("threats", [])
 
     score = 20
     if nodes:       score += 30
@@ -1545,7 +1745,7 @@ def evaluate(state: RAGState):
 
     retry = state.get("retry_count", 0)
     print(f"  EVALUATION: Multi-agent score {score}% (retry {retry})")
-    
+
     eval_details = {
         "final_score": score,
         "retry_attempt": retry,
@@ -1558,23 +1758,20 @@ def evaluate(state: RAGState):
 
     return {"eval_score": score, "eval_details": eval_details, "answer": answer}
 
-# ---------------- BUILD GRAPH ----------------
 def build_graph(all_docs):
     global retriever, generator, text_embedder
     retriever, generator, text_embedder = setup(all_docs)
 
     builder = StateGraph(RAGState)
 
-    # Register all nodes
     builder.add_node("retrieve", retrieve)
     builder.add_node("architect", architect_node)
     builder.add_node("threats", threat_analysis_node)
     builder.add_node("damage", damage_scenario_node)
-    builder.add_node("threat_scenarios", generate_threat_scenarios_node)
+    builder.add_node("threat_scenarios", threat_scenario_agent_node)
     builder.add_node("attacks", generate_attack_trees_node)
     builder.add_node("evaluate", evaluate)
 
-    # Clean linear graph
     builder.set_entry_point("retrieve")
     builder.add_edge("retrieve", "architect")
     builder.add_edge("architect", "threats")

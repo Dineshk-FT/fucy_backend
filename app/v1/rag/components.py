@@ -160,15 +160,6 @@ def _score_blob_match(blob_fname: str, search_terms: list[str]) -> int:
 def resolve_reference_report(ecu_entry: Optional[dict], user_query: str) -> Optional[dict]:
     """
     Find the best-matching reference JSON in REPORTS_DB for any ECU/system.
-
-    Strategy:
-    1. Build search terms from the ECU entry key, acronym, and name keywords.
-    2. Also include meaningful words from the raw user query.
-    3. Score every JSON blob in REPORTS_DB against those terms.
-    4. Return the highest-scoring match, or None if REPORTS_DB is empty.
-
-    This intentionally never hardcodes any ECU type (BMS, ABS, TCU, etc.) so
-    that the architect node stays fully generic.
     """
     client = get_azure_client()
 
@@ -186,24 +177,25 @@ def resolve_reference_report(ecu_entry: Optional[dict], user_query: str) -> Opti
     # ── Build search terms ────────────────────────────────────────────────
     search_terms: list[str] = []
 
+    # 1. Extract acronym directly from user query (e.g., "Battery Management System" -> "bms")
+    clean_query_words = [w for w in user_query.replace("-", " ").split() if w.lower() not in _SUFFIX_WORDS]
+    query_acronym = "".join(w[0].lower() for w in clean_query_words if w)
+    if len(query_acronym) >= 2:
+        search_terms.append(query_acronym)
+
     if ecu_entry:
         name_raw = ecu_entry.get("name", "")
+        
+        # 2. Grab the actual ID from the ECU database (this is usually "bms", "abs", etc.)
+        ecu_id = ecu_entry.get("id", ecu_entry.get("key", ""))
+        if ecu_id:
+            search_terms.append(str(ecu_id).lower())
 
-        # 1. Extract leading acronym, e.g. "bms" from "BMS (Battery Management System)"
-        m = re.match(r'^([A-Za-z]+)', name_raw)
-        if m:
-            search_terms.append(m.group(1).lower())
-
-        # 2. Meaningful words from the full name
+        # 3. Meaningful words from the full name
         for word in re.findall(r'\b[a-zA-Z]{3,}\b', name_raw):
             w = word.lower()
             if w not in _SUFFIX_WORDS:
                 search_terms.append(w)
-
-        # 3. ECU key itself (e.g. "motor_controller" → "motor", "controller")
-        for part in re.split(r'[_\-]', ecu_entry.get("key", "")):
-            if len(part) >= 3:
-                search_terms.append(part.lower())
 
     # 4. Meaningful words directly from the user query
     for word in re.findall(r'\b[a-zA-Z]{3,}\b', user_query):
@@ -223,7 +215,7 @@ def resolve_reference_report(ecu_entry: Optional[dict], user_query: str) -> Opti
 
     # ── Score every blob ──────────────────────────────────────────────────
     best_blob: Optional[str] = None
-    best_score = -1
+    best_score = 0  # <--- FIX: Must be strictly greater than 0 to match!
 
     for blob_path in json_blobs:
         fname = blob_path.split("/")[-1]
@@ -241,8 +233,8 @@ def resolve_reference_report(ecu_entry: Optional[dict], user_query: str) -> Opti
         else:
             print(f"  ⚠️  Could not download reference report: {fname}")
 
+    print("  ⚠️  No reference report scored higher than 0. Proceeding without structural reference.")
     return None
-
 
 def build_ref_context(reference_data: Optional[dict], ecu_entry: Optional[dict]) -> tuple[str, str]:
     """
@@ -322,13 +314,11 @@ def build_ref_context(reference_data: Optional[dict], ecu_entry: Optional[dict])
         f"{len(group_nodes)} groups, {len(edges)} edges.\n\n"
         f"Reference components:\n{node_summary}\n\n"
         f"Reference edges:\n{edge_summary}\n\n"
-        f"⚠️ ADAPT this structure to the TARGET SYSTEM below. "
-        f"Rename and adjust nodes to match the actual system — do not copy verbatim.\n"
+        f"⚠️ PRESERVE ALL reference components and edges. You MUST include this original data in your output. "
+        f"Create EXTRA nodes and edges as necessary to adapt this to the TARGET SYSTEM below, but do not exclude the original data.\n"
     )
 
     return ref_context, ecu_hint_context
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # POST-PROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
