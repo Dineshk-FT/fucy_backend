@@ -1,0 +1,280 @@
+{
+  "system_name": "Battery Management System ECU",
+  "extracted_user_defined_scenarios": [
+    {
+      "name": "CAN Bus Attack ( spoofing , Flooding Replay Attack)",
+      "description": "An attacker connects a malicious device to the vehicle OBD-II port (or compromises the Telematics unit) and sends high-priority CAN frames acting as the \"Charger,\" commanding the BMS to close contactors while the vehicle is not actually connected to a valid station.\r\n\r\n\r\nn attacker places a rouge device on the CAN1 bus. This device records \"low current\" messages from a previous drive cycle and replays them during a fast-charging session. The BMS believes current is low and fails to cut off charging, leading to battery overheating.",
+      "id": "39ff9305-9758-4287-9c55-c2da9b489ccf",
+      "threat_ids": [
+        {
+          "nodeId": "reactflow__edge-a3648d84-1377-4f20-81c9-10d7c406554db-0b84f29b-322e-4df0-a08c-f65a909c7e00right",
+          "propId": "ae9fc891-57ef-4e70-8222-ab0182e51aa2",
+          "rowId": "11c6fe2c-6071-4c97-893c-ee871929c1ff"
+        },
+        {
+          "nodeId": "reactflow__edge-a3648d84-1377-4f20-81c9-10d7c406554db-4d75c747-33e8-4143-a701-b68380e822b2right",
+          "propId": "cbfaedb4-b8be-4e80-9936-56e0a12e3b08",
+          "rowId": "11c6fe2c-6071-4c97-893c-ee871929c1ff"
+        },
+        {
+          "nodeId": "reactflow__edge-5f56abc6-54c7-481e-a681-8ad7e204fce8b-0b84f29b-322e-4df0-a08c-f65a909c7e00right",
+          "propId": "a1fe11c8-2c22-46f6-874c-778343cf0034",
+          "rowId": "11c6fe2c-6071-4c97-893c-ee871929c1ff"
+        },
+        {
+          "nodeId": "reactflow__edge-5f56abc6-54c7-481e-a681-8ad7e204fce8b-0b84f29b-322e-4df0-a08c-f65a909c7e00right",
+          "propId": "137b5420-c7f0-4ec1-b3fa-9ceaddd974cf",
+          "rowId": "11c6fe2c-6071-4c97-893c-ee871929c1ff"
+        },
+        {
+          "nodeId": "reactflow__edge-5f56abc6-54c7-481e-a681-8ad7e204fce8b-0b84f29b-322e-4df0-a08c-f65a909c7e00right",
+          "propId": "963c67c8-993f-4964-b057-aed870ef58a3",
+          "rowId": "11c6fe2c-6071-4c97-893c-ee871929c1ff"
+        },
+        {
+          "nodeId": "4d75c747-33e8-4143-a701-b68380e822b2",
+          "propId": "014b0f3a-a208-48be-8262-0346bcc1acf9",
+          "rowId": "6063ba74-01f0-40b6-ac2e-9ca6f0e4ae14"
+        },
+        {
+          "nodeId": "4d75c747-33e8-4143-a701-b68380e822b2",
+          "propId": "8dc29855-8061-46d9-8276-54362611b0fc",
+          "rowId": "6063ba74-01f0-40b6-ac2e-9ca6f0e4ae14"
+        }
+      ]
+    },
+    {
+      "name": "JTAG/SWD Readout",
+      "description": "An attacker gains physical access to the BMS PCB (e.g., from a junkyard or stolen car), connects to the open Debug Port, and dumps the firmware and memory contents to extract the private Keys and Certificates.",
+      "id": "eeaa396d-faa2-4f6a-ade9-93668982da15",
+      "threat_ids": [
+        {
+          "nodeId": "80a8460e-02d2-45c9-ab9a-35ccd5b1cfd7",
+          "propId": "3f7db478-0e2e-46b5-9a90-f4dcd98bf08f",
+          "rowId": "757bda65-eea1-4579-9302-b2cc382a6d66"
+        },
+        {
+          "nodeId": "80a8460e-02d2-45c9-ab9a-35ccd5b1cfd7",
+          "propId": "4ae4d5b2-e897-45ce-a9e4-24e3ac93337a",
+          "rowId": "757bda65-eea1-4579-9302-b2cc382a6d66"
+        },
+        {
+          "nodeId": "80a8460e-02d2-45c9-ab9a-35ccd5b1cfd7",
+          "propId": "296ddf8d-ee40-4126-b6a0-ac68363e686e",
+          "rowId": "757bda65-eea1-4579-9302-b2cc382a6d66"
+        }
+      ]
+    },
+    {
+      "name": "SPI Man-in-the-Middle",
+      "description": "An attacker solders a modification chip onto the SPI lines between the CellMonitoring unit and the Main MCU. This chip modifies the voltage readings on the fly, reporting 3.8V (safe) when the cell is actually at 4.5V (dangerous), preventing the BMS from balancing or stopping the charge.",
+      "id": "d3c4b49c-8074-43a2-9d01-856c84ec62d8",
+      "threat_ids": [
+        {
+          "nodeId": "reactflow__edge-a3648d84-1377-4f20-81c9-10d7c406554db-40f0c435-819e-4dfe-9114-4534d24d4b4fright",
+          "propId": "1f3b11e1-ea89-4ac7-8b04-fa29552cf7a1",
+          "rowId": "578ebb8f-817d-4e1e-b71f-60627972fd88"
+        },
+        {
+          "nodeId": "reactflow__edge-a3648d84-1377-4f20-81c9-10d7c406554db-40f0c435-819e-4dfe-9114-4534d24d4b4fright",
+          "propId": "65a36618-817b-477a-8c80-4b5d13a4a921",
+          "rowId": "temp_17"
+        }
+      ]
+    },
+    {
+      "name": "DFLASH Attack",
+      "description": "Downgrade Attack , Calibration Parameter Tampering , Odometer/SoH Fraud",
+      "id": "cc438ef7-6c08-4995-baaa-06611d1674a7",
+      "threat_ids": [
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "843cf0e2-d04f-40ce-b481-7d52af1f8828",
+          "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+        },
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "0220191b-8cbc-44ec-95ff-d81dc9c93e76",
+          "rowId": "1ed8505b-d1cf-45d6-a0fb-ed60a0c9f782"
+        },
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "1d20ee54-93d9-4dc1-bb15-653467fad719",
+          "rowId": "1ed8505b-d1cf-45d6-a0fb-ed60a0c9f782"
+        },
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "c20c0e4b-5a92-4bad-948c-a85d37977357",
+          "rowId": "61f79aaa-0fcb-42cc-b0b1-250ac029309e"
+        },
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "16cd3975-393c-4c8d-80fe-175e9e4350e5",
+          "rowId": "61f79aaa-0fcb-42cc-b0b1-250ac029309e"
+        },
+        {
+          "nodeId": "2c3f49ed-e1ec-41e5-b145-cf5b9ff5fbfb",
+          "propId": "e483d8f9-4a06-46b9-91d0-1b0c81862b03",
+          "rowId": "temp_16"
+        }
+      ]
+    }
+  ],
+  "remaining_unmapped_threats": [
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "c92bc290-ce21-4a1d-bc19-5dd5ac04fd08",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "b4e58177-275e-4c4d-a580-20005d300b76",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "7b96bcb8-2225-475c-9c17-974ae6468141",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "ab2636f6-fe32-4b8e-b791-69f1359983da",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "30c4be49-8fef-4124-ba5d-b46a59c445a9",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "5fb8caf6-2575-4ce2-8869-c2abc1fa85d0",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "405336cd-db69-4a10-969a-8137aa06703f",
+      "propId": "1414e687-8b06-49c2-9e4d-3bebf0a0a862",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "405336cd-db69-4a10-969a-8137aa06703f",
+      "propId": "b6474751-c547-45cf-9730-bae367aa5128",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "947cd18d-bdf0-42ab-9ec7-f48e1a1aad7e",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "5039df12-28dd-4456-821a-eb2abe9139fe",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "b5aaf557-4887-462d-8f33-078f0fe88ce9",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "2b2d8cf7-9546-4573-94b3-26762b5ac263",
+      "propId": "e35e3075-59a1-490f-8ffe-44429d16c576",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    },
+    {
+      "nodeId": "2b2d8cf7-9546-4573-94b3-26762b5ac263",
+      "propId": "0ce12f08-4574-48ed-b98f-1d0d19fbeae4",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "088517f9-f26e-45df-96a2-cba2bfa58148",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    },
+    {
+      "nodeId": "84763575-217a-4f1e-bcfb-829336c8bae7",
+      "propId": "8b7a14aa-eec6-4613-b4e7-0645f3c87b3c",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "f14131dd-167e-4f05-ad19-8f32727aaef6",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "bcc58e3d-17c8-4f17-8f54-374f8ebd31ba",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "6f7c17df-0321-4762-805e-44b4f8f75218",
+      "rowId": "ee61892e-e3b4-41c8-9472-e2736da32df2"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "ea6d6d75-332a-4609-bb13-fca0964f00e0",
+      "rowId": "ee61892e-e3b4-41c8-9472-e2736da32df2"
+    },
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "0f0153fd-3e52-4090-9e48-6137100b694f",
+      "rowId": "temp_13"
+    },
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "ca4ee91b-90d4-4b30-8c9d-a89f05962129",
+      "rowId": "temp_13"
+    },
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "235739b1-fc19-4b9a-855c-5cc6ba75af24",
+      "rowId": "temp_13"
+    },
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "341b511e-2dea-4af8-91c9-caea51af1e89",
+      "rowId": "temp_14"
+    },
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "a76ff812-027b-43fb-8254-f745272f1382",
+      "rowId": "temp_14"
+    },
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "86118133-b23a-4bc9-a9f6-eaf40bc8ee39",
+      "rowId": "temp_14"
+    },
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "5d780fd7-609a-4c6b-a91c-987cd1877359",
+      "rowId": "temp_15"
+    },
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "1aeeacd1-741e-45c9-8c2f-fc61311a7b0d",
+      "rowId": "temp_15"
+    },
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "49c12af3-6d88-4f56-b599-d6949481b4c2",
+      "rowId": "temp_15"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "355a9e08-a070-43ba-9f84-5b1a6444e914",
+      "rowId": "temp_16"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "16c0fb12-7a5d-4e11-99ff-63b8fdafd77b",
+      "rowId": "temp_16"
+    },
+    {
+      "nodeId": "40f0c435-819e-4dfe-9114-4534d24d4b4f",
+      "propId": "67934e68-18f0-4a53-a8e2-25562261af17",
+      "rowId": "temp_17"
+    }
+  ]
+}

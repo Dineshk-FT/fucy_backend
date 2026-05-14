@@ -1,0 +1,357 @@
+=== RAG DOC CONTEXT FED TO LLM ===
+
+
+### RETRIEVED REFERENCE DOCUMENTS:
+
+---
+Source: KNOWLEDGE_BASE
+## 1. System Architecture
+| Component | Type | Description | Security Props |
+| :--- | :--- | :--- | :--- |
+| BMS System | group | The central Battery Management System responsible for monitoring and controlling the battery pack. | Integrity, Authenticity |
+| MCU | group | The main microcontroller group housing critical components like Code Flash, Data Flash, Keys, Certificates, and Debug Port. | Integrity, Confidentiality, Authenticity |
+| CellMonitoring | default | Monitors individual battery cells for voltage, temperature, and other parameters. Communicates with the BatteryPack via SPI. | Integrity, Confidentiality |
+| IO and Analog | default | Handles input/output signals and analog sensor readings, interfacing with the BatteryPack. Communicates via internal IO pins. | Integrity, Confidentiality |
+| Vehicle Interface | default | Manages communication with the rest of the vehicle network via CAN transceivers. This includes the ICD Shunt CAN and main vehicle CAN. | Integrity, Confidentiality, Authenticity |
+---
+
+---
+Source: REPORTS_DB
+Architecture Hierarchy for [BatteryManagement]:
+  TOP: Vehicle System (type:default)
+  TOP: Cloud (type:default)
+  TOP: Battery Management System (type:group)
+  Battery Management System contains: BatteryPack (type:default), CellMonitoring (type:default), IO and Analog (type:default), 8082874e-707c-4bc8-94fe-627ee4e4a3ba (type:group), CAN Transceiver (type:default), ICD Shunt CAN (type:default), SoC (type:data), SoH (type:data)
+  8082874e-707c-4bc8-94fe-627ee4e4a3ba contains: Code Flash (type:default), Data Flash (type:default), Keys (type:default), Certificates (type:default), Debug Port (type:default)
+---
+
+---
+Source: REPORTS_DB
+Reference Component [BatteryManagement]: Battery Management System
+Type: group  IsAsset: False
+Description: 
+Security Properties: Integrity, Authenticity
+---
+
+
+=== FULL PROMPT FED TO LLM ===
+Generate threat scenarios using STRIDE categories.
+Each should include: targeted component, attack vector, attacker goal, and related damage scenario.
+
+
+
+### RETRIEVED REFERENCE DOCUMENTS:
+
+---
+Source: KNOWLEDGE_BASE
+## 1. System Architecture
+| Component | Type | Description | Security Props |
+| :--- | :--- | :--- | :--- |
+| BMS System | group | The central Battery Management System responsible for monitoring and controlling the battery pack. | Integrity, Authenticity |
+| MCU | group | The main microcontroller group housing critical components like Code Flash, Data Flash, Keys, Certificates, and Debug Port. | Integrity, Confidentiality, Authenticity |
+| CellMonitoring | default | Monitors individual battery cells for voltage, temperature, and other parameters. Communicates with the BatteryPack via SPI. | Integrity, Confidentiality |
+| IO and Analog | default | Handles input/output signals and analog sensor readings, interfacing with the BatteryPack. Communicates via internal IO pins. | Integrity, Confidentiality |
+| Vehicle Interface | default | Manages communication with the rest of the vehicle network via CAN transceivers. This includes the ICD Shunt CAN and main vehicle CAN. | Integrity, Confidentiality, Authenticity |
+---
+
+---
+Source: REPORTS_DB
+Architecture Hierarchy for [BatteryManagement]:
+  TOP: Vehicle System (type:default)
+  TOP: Cloud (type:default)
+  TOP: Battery Management System (type:group)
+  Battery Management System contains: BatteryPack (type:default), CellMonitoring (type:default), IO and Analog (type:default), 8082874e-707c-4bc8-94fe-627ee4e4a3ba (type:group), CAN Transceiver (type:default), ICD Shunt CAN (type:default), SoC (type:data), SoH (type:data)
+  8082874e-707c-4bc8-94fe-627ee4e4a3ba contains: Code Flash (type:default), Data Flash (type:default), Keys (type:default), Certificates (type:default), Debug Port (type:default)
+---
+
+---
+Source: REPORTS_DB
+Reference Component [BatteryManagement]: Battery Management System
+Type: group  IsAsset: False
+Description: 
+Security Properties: Integrity, Authenticity
+---
+
+
+### THREAT GROUPS REQUIRING SCENARIOS:
+Each group targets a specific component. Use the "component" field to name the scenario appropriately.
+Include: targeted component, attack vector, attacker goal, and related damage scenario in the description.
+Use STRIDE categories (Spoofing, Tampering, Repudiation, Info Disclosure, Denial of Service, Elevation of Privilege).
+
+{
+  "a7b74f96-c432-41e0-b8ea-f60198c78006": {
+    "component": "Code Flash",
+    "threat_count": 10,
+    "threat_properties": [
+      "ea6d6d75-332a-4609-bb13-fca0964f00e0",
+      "16c0fb12-7a5d-4e11-99ff-63b8fdafd77b",
+      "6f7c17df-0321-4762-805e-44b4f8f75218",
+      "7b96bcb8-2225-475c-9c17-974ae6468141",
+      "5fb8caf6-2575-4ce2-8869-c2abc1fa85d0",
+      "b4e58177-275e-4c4d-a580-20005d300b76",
+      "c92bc290-ce21-4a1d-bc19-5dd5ac04fd08",
+      "30c4be49-8fef-4124-ba5d-b46a59c445a9",
+      "ab2636f6-fe32-4b8e-b791-69f1359983da",
+      "355a9e08-a070-43ba-9f84-5b1a6444e914"
+    ]
+  },
+  "405336cd-db69-4a10-969a-8137aa06703f": {
+    "component": "Soc",
+    "threat_count": 2,
+    "threat_properties": [
+      "1414e687-8b06-49c2-9e4d-3bebf0a0a862",
+      "b6474751-c547-45cf-9730-bae367aa5128"
+    ]
+  },
+  "47626323-3ecc-46e1-9a2b-22d500423621": {
+    "component": "Certificates",
+    "threat_count": 6,
+    "threat_properties": [
+      "bcc58e3d-17c8-4f17-8f54-374f8ebd31ba",
+      "947cd18d-bdf0-42ab-9ec7-f48e1a1aad7e",
+      "5039df12-28dd-4456-821a-eb2abe9139fe",
+      "f14131dd-167e-4f05-ad19-8f32727aaef6",
+      "088517f9-f26e-45df-96a2-cba2bfa58148",
+      "b5aaf557-4887-462d-8f33-078f0fe88ce9"
+    ]
+  },
+  "2b2d8cf7-9546-4573-94b3-26762b5ac263": {
+    "component": "Io And Analog",
+    "threat_count": 2,
+    "threat_properties": [
+      "0ce12f08-4574-48ed-b98f-1d0d19fbeae4",
+      "e35e3075-59a1-490f-8ffe-44429d16c576"
+    ]
+  },
+  "84763575-217a-4f1e-bcfb-829336c8bae7": {
+    "component": "Keys",
+    "threat_count": 1,
+    "threat_properties": [
+      "8b7a14aa-eec6-4613-b4e7-0645f3c87b3c"
+    ]
+  },
+  "a3648d84-1377-4f20-81c9-10d7c406554d": {
+    "component": "a3648d84-1377-4f20-81c9-10d7c406554d",
+    "threat_count": 3,
+    "threat_properties": [
+      "235739b1-fc19-4b9a-855c-5cc6ba75af24",
+      "0f0153fd-3e52-4090-9e48-6137100b694f",
+      "ca4ee91b-90d4-4b30-8c9d-a89f05962129"
+    ]
+  },
+  "eface6d1-fb87-43fa-bd7e-c5b8f287c86e": {
+    "component": "Cloud",
+    "threat_count": 3,
+    "threat_properties": [
+      "a76ff812-027b-43fb-8254-f745272f1382",
+      "86118133-b23a-4bc9-a9f6-eaf40bc8ee39",
+      "341b511e-2dea-4af8-91c9-caea51af1e89"
+    ]
+  },
+  "5f56abc6-54c7-481e-a681-8ad7e204fce8": {
+    "component": "Vehicle System",
+    "threat_count": 3,
+    "threat_properties": [
+      "49c12af3-6d88-4f56-b599-d6949481b4c2",
+      "5d780fd7-609a-4c6b-a91c-987cd1877359",
+      "1aeeacd1-741e-45c9-8c2f-fc61311a7b0d"
+    ]
+  },
+  "40f0c435-819e-4dfe-9114-4534d24d4b4f": {
+    "component": "Cellmonitoring",
+    "threat_count": 1,
+    "threat_properties": [
+      "67934e68-18f0-4a53-a8e2-25562261af17"
+    ]
+  }
+}
+
+### FULL THREAT ID REFERENCE (for threat_ids linking):
+{
+  "a7b74f96-c432-41e0-b8ea-f60198c78006": [
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "c92bc290-ce21-4a1d-bc19-5dd5ac04fd08",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "b4e58177-275e-4c4d-a580-20005d300b76",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "7b96bcb8-2225-475c-9c17-974ae6468141",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "ab2636f6-fe32-4b8e-b791-69f1359983da",
+      "rowId": "cf9ddb98-bf83-4d03-bd46-3d3068dfe5d3"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "30c4be49-8fef-4124-ba5d-b46a59c445a9",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "5fb8caf6-2575-4ce2-8869-c2abc1fa85d0",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "6f7c17df-0321-4762-805e-44b4f8f75218",
+      "rowId": "ee61892e-e3b4-41c8-9472-e2736da32df2"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "ea6d6d75-332a-4609-bb13-fca0964f00e0",
+      "rowId": "ee61892e-e3b4-41c8-9472-e2736da32df2"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "355a9e08-a070-43ba-9f84-5b1a6444e914",
+      "rowId": "temp_16"
+    },
+    {
+      "nodeId": "a7b74f96-c432-41e0-b8ea-f60198c78006",
+      "propId": "16c0fb12-7a5d-4e11-99ff-63b8fdafd77b",
+      "rowId": "temp_16"
+    }
+  ],
+  "405336cd-db69-4a10-969a-8137aa06703f": [
+    {
+      "nodeId": "405336cd-db69-4a10-969a-8137aa06703f",
+      "propId": "1414e687-8b06-49c2-9e4d-3bebf0a0a862",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    },
+    {
+      "nodeId": "405336cd-db69-4a10-969a-8137aa06703f",
+      "propId": "b6474751-c547-45cf-9730-bae367aa5128",
+      "rowId": "fc0fba9d-7b16-4ada-9c48-97f98ec68198"
+    }
+  ],
+  "47626323-3ecc-46e1-9a2b-22d500423621": [
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "947cd18d-bdf0-42ab-9ec7-f48e1a1aad7e",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "5039df12-28dd-4456-821a-eb2abe9139fe",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "b5aaf557-4887-462d-8f33-078f0fe88ce9",
+      "rowId": "2fbd0790-f81e-4b22-bb02-f176a363e43f"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "088517f9-f26e-45df-96a2-cba2bfa58148",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "f14131dd-167e-4f05-ad19-8f32727aaef6",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    },
+    {
+      "nodeId": "47626323-3ecc-46e1-9a2b-22d500423621",
+      "propId": "bcc58e3d-17c8-4f17-8f54-374f8ebd31ba",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    }
+  ],
+  "2b2d8cf7-9546-4573-94b3-26762b5ac263": [
+    {
+      "nodeId": "2b2d8cf7-9546-4573-94b3-26762b5ac263",
+      "propId": "e35e3075-59a1-490f-8ffe-44429d16c576",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    },
+    {
+      "nodeId": "2b2d8cf7-9546-4573-94b3-26762b5ac263",
+      "propId": "0ce12f08-4574-48ed-b98f-1d0d19fbeae4",
+      "rowId": "9e453fa4-7c78-44a4-9cb9-dcfab2b113a3"
+    }
+  ],
+  "84763575-217a-4f1e-bcfb-829336c8bae7": [
+    {
+      "nodeId": "84763575-217a-4f1e-bcfb-829336c8bae7",
+      "propId": "8b7a14aa-eec6-4613-b4e7-0645f3c87b3c",
+      "rowId": "a028ff31-c6d2-46d2-91b2-741506b660e6"
+    }
+  ],
+  "a3648d84-1377-4f20-81c9-10d7c406554d": [
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "0f0153fd-3e52-4090-9e48-6137100b694f",
+      "rowId": "temp_13"
+    },
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "ca4ee91b-90d4-4b30-8c9d-a89f05962129",
+      "rowId": "temp_13"
+    },
+    {
+      "nodeId": "a3648d84-1377-4f20-81c9-10d7c406554d",
+      "propId": "235739b1-fc19-4b9a-855c-5cc6ba75af24",
+      "rowId": "temp_13"
+    }
+  ],
+  "eface6d1-fb87-43fa-bd7e-c5b8f287c86e": [
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "341b511e-2dea-4af8-91c9-caea51af1e89",
+      "rowId": "temp_14"
+    },
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "a76ff812-027b-43fb-8254-f745272f1382",
+      "rowId": "temp_14"
+    },
+    {
+      "nodeId": "eface6d1-fb87-43fa-bd7e-c5b8f287c86e",
+      "propId": "86118133-b23a-4bc9-a9f6-eaf40bc8ee39",
+      "rowId": "temp_14"
+    }
+  ],
+  "5f56abc6-54c7-481e-a681-8ad7e204fce8": [
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "5d780fd7-609a-4c6b-a91c-987cd1877359",
+      "rowId": "temp_15"
+    },
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "1aeeacd1-741e-45c9-8c2f-fc61311a7b0d",
+      "rowId": "temp_15"
+    },
+    {
+      "nodeId": "5f56abc6-54c7-481e-a681-8ad7e204fce8",
+      "propId": "49c12af3-6d88-4f56-b599-d6949481b4c2",
+      "rowId": "temp_15"
+    }
+  ],
+  "40f0c435-819e-4dfe-9114-4534d24d4b4f": [
+    {
+      "nodeId": "40f0c435-819e-4dfe-9114-4534d24d4b4f",
+      "propId": "67934e68-18f0-4a53-a8e2-25562261af17",
+      "rowId": "temp_17"
+    }
+  ]
+}
+
+### TASK:
+Generate a JSON dictionary where the keys are the EXACT group IDs from above, and the values are objects with 'name' and 'description'.
+
+Example:
+{
+  "group-id-1": {
+    "name": "Specific Attack Scenario Name",
+    "description": "Detailed description covering attack vector, attacker goal, and damage."
+  }
+}
+
+Return ONLY a valid JSON object. No markdown fences. No extra text.

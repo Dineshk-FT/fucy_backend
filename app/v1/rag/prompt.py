@@ -554,51 +554,66 @@ Return ONLY a valid JSON object. No markdown fences. No commentary. Start with `
 }
 """
 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. ATTACK TREE AGENT
+# 5. ATTACK SCENARIO AGENT
 # ─────────────────────────────────────────────────────────────────────────────
 
-ATTACK_TREE_PROMPT = """
-You are a Red-Team automotive cybersecurity expert performing a TARA analysis (ISO 21434).
+ATTACK_SCENARIO_PROMPT = """
+You are a Red-Team automotive cybersecurity expert performing ISO 21434 TARA attack analysis.
 
-SYSTEM CONTEXT:
-System Name: {{ system_name }}
-Architecture Components: {{ components | join(', ') }}
+TARGET SYSTEM: {{ question }}
 
-THREAT SCENARIO TO ANALYZE:
-ID: {{ ts_id }}
-Goal: "{{ goal }}"
-Threat Category: {{ category }}
-Target Asset: {{ asset }}
+### SYSTEM ARCHITECTURE (for component reference):
+{{ architecture }}
 
-TASK:
-Generate a technical 2-level Attack Tree for this specific threat scenario.
+### UNCOVERED THREAT SCENARIOS (need attack trees):
+{{ threat_scenarios }}
 
-REQUIREMENTS:
-1. Use OR-Gate logic (any one path can achieve the goal).
-2. Level 1 (Attack Vectors): Identify 3 distinct attack vectors (e.g., Physical Access, Remote Exploitation, Supply Chain) targeting the system components.
-3. Level 2 (Technical Methods): Identify 2-3 specific technical methods for each vector (e.g., UDS Session control, CAN Bus Injection, Debug Port exploitation).
-4. Reference actual components from the architecture list above.
-5. Output must be technical and specific to automotive protocols.
+### EXISTING ATTACK SCENARIOS (DO NOT DUPLICATE):
+{{ existing_attacks }}
 
-OUTPUT FORMAT:
-Return ONLY valid JSON. No markdown, no commentary.
-{
-  "goal": "{{ goal }}",
-  "gate": "OR",
-  "type": "surface_goal",
-  "asset": "{{ asset }}",
-  "children": [
-    {
-      "goal": "Attack Vector description",
-      "gate": "OR",
-      "type": "attack_vector",
-      "children": [
-        {"goal": "Specific technical method 1", "type": "method"},
-        {"goal": "Specific technical method 2", "type": "method"}
-      ]
-    }
-  ]
-}
-"""
+### EXISTING ATTACK TREES (DO NOT DUPLICATE):
+{{ existing_attack_trees }}
 
+### YOUR TASK:
+Generate attack trees and individual attack scenarios for the uncovered threat scenarios.
+
+### ATTACK TREE REQUIREMENTS:
+1. Each attack tree must have:
+   - A root node representing the threat scenario
+   - At least one OR Gate
+   - Multiple attack vectors (Level 1)
+   - Specific technical methods per vector (Level 2)
+   
+2. Node structure:
+   ```json
+   {
+     "id": "uuid",
+     "type": "default" | "OR Gate" | "Event",
+     "data": {
+       "label": "node label",
+       "connections": [],
+       "style": {
+         "backgroundColor": "transparent",
+         "borderColor": "black",
+         "borderStyle": "solid",
+         "borderWidth": "2px",
+         "color": "black",
+         "fontFamily": "Inter",
+         "fontSize": "16px",
+         "fontStyle": "normal",
+         "fontWeight": 500,
+         "height": 60,
+         "textAlign": "center",
+         "textDecoration": "none",
+         "width": 150
+       }
+     },
+     "position": {"x": 592, "y": 32},
+     "width": 150,
+     "height": 60,
+     "nodeType": "derived",
+     "threat_ids": []
+   }"""
