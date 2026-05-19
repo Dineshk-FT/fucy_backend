@@ -275,16 +275,29 @@ def main():
         node_id = tree.get("id", str(uuid.uuid4())[:8])
         gate = tree.get("gate", "OR")
         
+        # Map semantic tree type → React Flow node type.
+        # "surface_goal" is the threat-scenario root and must NOT be "default"
+        # (the frontend treats "default" nodes as architecture component nodes
+        # and pulls them as attacks). Use the semantic type directly so the
+        # frontend can distinguish roots from actual attack-method leaf nodes.
+        TREE_TYPE_MAP = {
+            "surface_goal":  "derived",   # threat-scenario root — skip as attack
+            "attack_vector": "Event",     # level-1 attack vector
+            "method":        "Event",     # level-2 specific method
+        }
+        semantic_type = tree.get("type", "method")
+        rf_node_type  = TREE_TYPE_MAP.get(semantic_type, "Event")
+
         # Create standard node structure matching bms_1.json
         # Each node is 180px wide. With 600px level_width, we have plenty of room.
         current_node = {
             "id": node_id,
-            "type": "default",
+            "type": rf_node_type,
             "position": {"x": x, "y": y},
             "data": {
                 "label": tree.get("goal", ""),
                 "nodeId": node_id,
-                "nodeType": tree.get("type", "derived"),
+                "nodeType": rf_node_type,
                 "style": {
                     "backgroundColor": "transparent",
                     "borderColor": "black",

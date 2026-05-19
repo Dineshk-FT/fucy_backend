@@ -591,9 +591,10 @@ Generate attack trees and individual attack scenarios for the uncovered threat s
    ```json
    {
      "id": "uuid",
-     "type": "default" | "OR Gate" | "Event",
+     "type": "derived" | "OR Gate" | "Event",
      "data": {
        "label": "node label",
+       "nodeType": "derived" | null,
        "connections": [],
        "style": {
          "backgroundColor": "transparent",
@@ -616,4 +617,9 @@ Generate attack trees and individual attack scenarios for the uncovered threat s
      "height": 60,
      "nodeType": "derived",
      "threat_ids": []
-   }"""
+   }
+
+   IMPORTANT — node type rules:
+   - Root node (threat scenario / top-level goal): MUST use "type": "derived". This is the threat scenario header, NOT an attack step.
+   - Gate nodes: "type": "OR Gate" or "type": "AND Gate"
+   - Leaf/attack-method nodes: "type": "Event"."""

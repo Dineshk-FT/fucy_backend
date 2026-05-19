@@ -850,13 +850,13 @@ def generate_attack_trees_node(state: RAGState):
     if not flat_ts_list and raw_ts_data and "type" not in raw_ts_data[0]:
         flat_ts_list = raw_ts_data
     
-    def _create_node(label, name, x, y, desc="", node_type="default", threat_ids=None):
+    def _create_node(label, name, x, y, desc="", node_type="derived", threat_ids=None):
         uid = str(uuid.uuid4())
         new_conn_id = str(uuid.uuid4())
         return {
             "id": uid,
             "nodeId": uid,
-            "type": "default",
+            "type": node_type,
             "nodeType": node_type,
             "label": label,
             "name": name,
@@ -1233,46 +1233,136 @@ def attack_scenario_agent_node(state: RAGState):
                     user_defined_ts.append(detail)
     
     print(f"  ℹ️  {len(user_defined_ts)} user-defined threat scenarios need attack trees")
-    
-    # ── Generate extras via LLM ────────────────────────────────────────
+
+    # ── Build extra trees deterministically using flatten_tree (add_attack_trees logic) ──
+    # No LLM call — avoids timeout. Each uncovered threat scenario gets a
+    # skeleton tree (root node only, type='derived') so it appears in the
+    # attack_trees section without being misidentified as an attack entry.
+    # The add_attack_trees.py Phase-2 script can enrich these with real vectors later.
     new_attack_trees = []
     new_attacks = []
-    
-    if user_defined_ts:
-        tmpl = jinja2.Template(ATTACK_SCENARIO_PROMPT)
+
+    # Semantic type → React Flow node type map (mirrors add_attack_trees.py)
+    TREE_TYPE_MAP = {
+        "surface_goal":  "derived",   # threat-scenario root — never an attack
+        "attack_vector": "Event",
+        "method":        "Event",
+    }
+
+    def _flatten_tree(tree, x=0, y=0, level_width=600):
+        """Flatten a nested attack-tree dict into React Flow nodes + edges.
+        Uses semantic types so threat-scenario roots are never type='default'."""
+        nodes, edges = [], []
+        node_id  = tree.get("id", str(_uuid.uuid4())[:8])
+        gate     = tree.get("gate", "OR")
+        semantic = tree.get("type", "method")
+        rf_type  = TREE_TYPE_MAP.get(semantic, "Event")
+
+        current = {
+            "id":       node_id,
+            "type":     rf_type,
+            "nodeType": rf_type,
+            "position": {"x": x, "y": y},
+            "positionAbsolute": {"x": x, "y": y},
+            "width": 180, "height": 60,
+            "dragged": True, "dragging": False, "selected": False,
+            "data": {
+                "label":    tree.get("goal", tree.get("name", "")),
+                "nodeId":   node_id,
+                "nodeType": rf_type,
+                "connections": [],
+                "style": {
+                    "backgroundColor": "transparent", "borderColor": "black",
+                    "borderStyle": "solid", "borderWidth": "2px", "color": "black",
+                    "fontFamily": "Inter", "fontSize": "14px", "fontWeight": 500,
+                    "height": 60, "textAlign": "center", "width": 180,
+                },
+            },
+        }
+        nodes.append(current)
+
+        children = tree.get("children", [])
+        if children:
+            child_y = y + 250
+            start_x = x - ((len(children) - 1) * level_width / 2)
+            for i, child in enumerate(children):
+                child_x = start_x + i * level_width
+                c_nodes, c_edges = _flatten_tree(child, child_x, child_y, level_width / 1.5)
+                nodes.extend(c_nodes)
+                edges.extend(c_edges)
+                child_id = child.get("id")
+                current["data"]["connections"].append({"id": child_id, "type": f"{gate} Gate"})
+                edges.append({
+                    "id": f"e-{node_id}-{child_id}",
+                    "source": node_id, "target": child_id,
+                    "sourceHandle": "b", "targetHandle": "t",
+                    "type": "step", "animated": True,
+                    "style": {"strokeWidth": 2, "stroke": "#000000"},
+                    "markerEnd": {"type": "arrowclosed", "color": "#000000", "width": 20, "height": 20},
+                })
+        return nodes, edges
+
+    def _sanitize_tree_nodes(nodes):
+        """Ensure nodes with nodeType='derived' are never type='default'.
+        Any stray 'default' in an attack tree becomes 'Event'."""
+        for node in nodes:
+            nt = (node.get("data") or {}).get("nodeType") or node.get("nodeType", "")
+            if nt == "derived":
+                node["type"] = "derived"
+                node["nodeType"] = "derived"
+                if isinstance(node.get("data"), dict):
+                    node["data"]["nodeType"] = "derived"
+            elif node.get("type") == "default":
+                node["type"] = "Event"
+                if isinstance(node.get("data"), dict):
+                    node["data"]["nodeType"] = "Event"
+
+    # Also sanitize reference trees before combining
+    for scene in existing_attack_trees:
+        if "templates" in scene:
+            _sanitize_tree_nodes(scene["templates"].get("nodes", []))
+
+    # ── Collect uncovered derived scenarios, cap LLM call at MAX_EXTRAS ─────
+    MAX_EXTRAS = 3
+    uncovered_ts = []
+    for ts_block in state.get("threat_scenarios", []):
+        if ts_block.get("type", "").lower() != "derived":
+            continue
+        for ds_group in ts_block.get("Details", []):
+            for ts in ds_group.get("Details", []):
+                ts_name = ts.get("name", "").strip()
+                if ts_name and ts_name.lower() not in covered_threat_names:
+                    uncovered_ts.append(ts)
+
+    extras_ts = uncovered_ts[:MAX_EXTRAS]
+    print(f"  ℹ️  {len(uncovered_ts)} uncovered derived scenarios — calling LLM for {len(extras_ts)}")
+
+    if extras_ts:
+        from app.v1.rag.prompt import ATTACK_SCENARIO_PROMPT
+        tmpl   = jinja2.Template(ATTACK_SCENARIO_PROMPT)
         prompt = tmpl.render(
             question=state["user_query"],
             architecture=json.dumps(state["architecture"], indent=2),
-            threat_scenarios=json.dumps(user_defined_ts, indent=2),
+            threat_scenarios=json.dumps(extras_ts, indent=2),
             existing_attacks=json.dumps(existing_attacks, indent=2),
-            existing_attack_trees=json.dumps(existing_attack_trees, indent=2)
+            existing_attack_trees=json.dumps(existing_attack_trees, indent=2),
         )
-        
-        if user_defined_ts:
-            target_extras = min(len(user_defined_ts), 5)
-            prompt += (
-                f"\n\nGenerate attack trees for {target_extras} of the uncovered threat scenarios above. "
-                "For each, create a detailed attack tree with OR gates and specific attack vectors. "
-                "Also generate individual attack scenarios for the leaf nodes of each tree.\n"
-            )
-        
-        result = safe_generate(prompt, "AttackScenarioAnalyst")
-        raw_json = result["replies"][0] if result["replies"] else "{}"
-        
-        log_prompt("attack_scenario_agent_node", state.get("documents", []), prompt, raw_json)
-        
-        time.sleep(10)
-        
+        prompt += (
+            f"\n\nGenerate attack trees for exactly {len(extras_ts)} threat scenario(s) listed above. "
+            "Return JSON with keys: attack_trees (list) and attacks (list).\n"
+        )
         try:
-            cleaned = clean_json_response(raw_json)
+            result   = safe_generate(prompt, "AttackScenarioAnalyst")
+            raw_json = result["replies"][0] if result["replies"] else "{}"
+            log_prompt("attack_scenario_agent_node", state.get("documents", []), prompt, raw_json)
+            time.sleep(5)
+            cleaned     = clean_json_response(raw_json)
             attack_data = json.loads(cleaned)
-            
-            llm_trees = attack_data.get("attack_trees", attack_data.get("Attack_Trees", []))
+            llm_trees   = attack_data.get("attack_trees", attack_data.get("Attack_Trees", []))
             llm_attacks = attack_data.get("attacks", attack_data.get("Attacks", []))
-            
             for tree in llm_trees:
                 if "templates" in tree:
-                    templates = tree["templates"]
+                    templates       = tree["templates"]
                     node_id_mapping = {}
                     for node in templates.get("nodes", []):
                         old_id = node.get("id", "")
@@ -1281,24 +1371,21 @@ def attack_scenario_agent_node(state: RAGState):
                         node["id"] = new_id
                         if "nodeId" in node:
                             node["nodeId"] = new_id
+                    _sanitize_tree_nodes(templates.get("nodes", []))
                     for edge in templates.get("edges", []):
                         if edge.get("source") in node_id_mapping:
                             edge["source"] = node_id_mapping[edge["source"]]
                         if edge.get("target") in node_id_mapping:
                             edge["target"] = node_id_mapping[edge["target"]]
-                
                 tree["ID"] = str(_uuid.uuid4())
                 new_attack_trees.append(tree)
-            
+                print(f"      ├─ LLM tree added: '{tree.get("Name", "unnamed")[:55]}'")
             for attack in llm_attacks:
                 attack["ID"] = str(_uuid.uuid4())
                 new_attacks.append(attack)
-            
         except Exception as e:
-            print(f"  ❌ LLM Attack Scenario parsing failed: {e}")
-            import traceback
-            traceback.print_exc()
-    
+            print(f"  ⚠️  LLM extras failed ({e}) — reference trees retained")
+
     # ── Combine all attacks ─────────────────────────────────────────────
     combined_attacks = existing_attacks + new_attacks
     combined_trees = existing_attack_trees + new_attack_trees
