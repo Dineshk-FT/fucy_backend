@@ -1379,7 +1379,7 @@ def attack_scenario_agent_node(state: RAGState):
                             edge["target"] = node_id_mapping[edge["target"]]
                 tree["ID"] = str(_uuid.uuid4())
                 new_attack_trees.append(tree)
-                print(f"      ├─ LLM tree added: '{tree.get("Name", "unnamed")[:55]}'")
+                # print(f"      ├─ LLM tree added: '{tree.get('Name', 'unnamed')[:55]}'")
             for attack in llm_attacks:
                 attack["ID"] = str(_uuid.uuid4())
                 new_attacks.append(attack)

@@ -2716,74 +2716,6 @@ def convert_possible_events_internal(model_id, user_prompt=None):
         return {"message": f"Event conversion completed with warnings", "converted": 0}
 
 
-def generate_cybersecurity_artifacts_internal(model_id, system_name, user_prompt=None):
-    """
-    Internal function for generating cybersecurity artifacts.
-    """
-    try:
-        # Check if already have cybersecurity data
-        existing = list(db.Cybersecurity.find({"model_id": model_id}))
-        if existing:
-            return {"message": "Cybersecurity artifacts already exist", "existing_count": len(existing)}
-
-        default_prompt = f"""
-            You are an expert in cybersecurity engineering (ISO/SAE 21434).
-            Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals,
-            and cybersecurity_claims for the system '{system_name}'.
-            Return ONLY valid JSON.
-            """
-
-        data_structure_prompt = """
-            {
-            "cybersecurity_requirements": {
-                "scenes": [{"ID": "<uuid>", "Name": "<requirement name>", "Description": "<description>", "threat_id": null}]
-            },
-            "cybersecurity_controls": {
-                "scenes": [{"ID": "<uuid>", "Name": "<control name>", "Description": "<description>", "threat_id": null}]
-            },
-            "cybersecurity_claims": {
-                "scenes": [{"ID": "<uuid>", "Name": "<claim name>", "Description": "<description>", "threat_id": null}]
-            },
-            "cybersecurity_goals": {
-                "scenes": [{"ID": "<uuid>", "Name": "<goal name>", "Description": "<description>", "threat_id": null}]
-            }
-            }
-            """
-
-        final_prompt = (user_prompt or default_prompt) + data_structure_prompt
-
-        gemini_response = gemini_client.generate_content(final_prompt)
-        content_text = gemini_client.get_text(gemini_response)
-
-        cleaned = content_text.strip().strip("`").strip("json").strip()
-        cleaned = extract_json_block(cleaned)
-        all_scenes = json.loads(cleaned)
-
-        response = {}
-        for artifact_type in [
-            "cybersecurity_requirements",
-            "cybersecurity_controls",
-            "cybersecurity_claims",
-            "cybersecurity_goals"
-        ]:
-            scenes_obj = all_scenes.get(artifact_type, {})
-            scenes = scenes_obj.get("scenes", [])
-            
-            doc = {
-                "model_id": model_id,
-                "type": artifact_type,
-                "scenes": scenes
-            }
-            
-            result = db.Cybersecurity.insert_one(doc)
-            doc["_id"] = str(result.inserted_id)
-            response[artifact_type] = doc
-
-        return response
-    except Exception as e:
-        print(f"  ⚠️ Cybersecurity generation warning: {e}")
-        return {"message": "Cybersecurity generation skipped", "error": str(e)}
-
 
 # Full attack scenario pipeline
 @modelprompt.route('/v1/generate/full-attack-scenario', methods=['POST'])
@@ -2916,36 +2848,80 @@ def generate_cybersecurity_artifact_with_gemini(artifact_type, system_name):
         print("Gemini Output (cleaned):", cleaned)
 
 
-@modelprompt.route('/v1/generate/cybersecurity-artifacts', methods=['POST'])
-def generate_cybersecurity_artifacts():
+def generate_cybersecurity_artifacts_internal(model_id, system_name, user_prompt=None):
     """
-    Generate and save cybersecurity requirements, controls, goals, and claims.
+    Internal function for generating cybersecurity artifacts using RAG reference extraction.
     """
     try:
+        # Check if already have cybersecurity data
+        existing = list(db.Cybersecurity.find({"model_id": model_id}))
+        if existing:
+            return {"message": "Cybersecurity artifacts already exist", "existing_count": len(existing)}
 
-        # Check if the request is JSON
-        if request.is_json:
-            data = request.get_json()
-        else:
-            data = request.form
+        # ── Pull reference data ──────────────────────────────────────────
+        from app.v1.rag.components import resolve_ecu, resolve_reference_report
+        from app.v1.rag.azure_client import get_azure_client
+        from app.v1.rag.config import AZURE_PATHS
+        import copy
+        import uuid
 
+        reference_data = None
+        
+        try:
+            client = get_azure_client()
+            reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip('/')
+            bms_1_blob = f"{reports_path}/bms_1.json"
+            reference_data = client.download_json(bms_1_blob)
+            if reference_data:
+                print("  ✅ Loaded bms_1.json for cybersecurity reference")
+        except Exception as e:
+            print(f"  ⚠️ Could not pull bms_1.json: {e}")
 
-        model_id = data.get('modelId', '')
-        system_name = data.get('systemName', '')
-        user_prompt = data.get('cybersecurityPrompt', '')
+        if not reference_data and system_name:
+            ecu_entry = resolve_ecu(system_name)
+            reference_data = resolve_reference_report(ecu_entry, system_name)
 
-        if not model_id or not system_name:
-            return jsonify({"error": "Missing modelId or systemName"}), 400
+        # ── Extract existing cybersecurity artifacts ─────────────────────
+        existing_artifacts = {
+            "cybersecurity_requirements": [],
+            "cybersecurity_controls": [],
+            "cybersecurity_claims": [],
+            "cybersecurity_goals": []
+        }
 
+        if reference_data and "Cybersecurity" in reference_data:
+            print("  ✅ Found reference Cybersecurity artifacts — extracting")
+            for cyber_block in reference_data["Cybersecurity"]:
+                c_type = cyber_block.get("type", "")
+                if c_type in existing_artifacts:
+                    for scene in cyber_block.get("scenes", []):
+                        scene_copy = copy.deepcopy(scene)
+                        scene_copy["ID"] = str(uuid.uuid4()) # Assign a fresh UUID
+                        # Clear specific scenario bindings to prevent broken links
+                        scene_copy["threat_id"] = None
+                        scene_copy["threat_key"] = None
+                        scene_copy["attack_scene_id"] = None
+                        scene_copy["attack_scene_name"] = None
+                        existing_artifacts[c_type].append(scene_copy)
+
+        # ── LLM Prompt Construction ──────────────────────────────────────
         default_prompt = f"""
             You are an expert in cybersecurity engineering (ISO/SAE 21434).
             Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals,
             and cybersecurity_claims for the system '{system_name}'.
-            Return ONLY valid JSON in the format below (no explanation or extra text):
+            """
+
+        existing_context = ""
+        if any(existing_artifacts.values()):
+            existing_context = f"""
+            ### EXISTING ARTIFACTS (DO NOT DUPLICATE THESE):
+            {json.dumps(existing_artifacts, indent=2)}
+
+            Generate 2-3 ADDITIONAL items for EACH category that are not already covered above.
             """
 
         data_structure_prompt = """
-            (for Data structure)
+            Return ONLY valid JSON containing your NEW items in the exact format below:
             {
             "cybersecurity_requirements": {
                 "scenes": [{"ID": "<uuid>", "Name": "<requirement name>", "Description": "<description>", "threat_id": null}]
@@ -2960,12 +2936,148 @@ def generate_cybersecurity_artifacts():
                 "scenes": [{"ID": "<uuid>", "Name": "<goal name>", "Description": "<description>", "threat_id": null}]
             }
             }
+            """
 
+        final_prompt = (user_prompt or default_prompt) + existing_context + data_structure_prompt
+
+        gemini_response = gemini_client.generate_content(final_prompt)
+        content_text = gemini_client.get_text(gemini_response)
+
+        cleaned = content_text.strip().strip("`").strip("json").strip()
+        cleaned = extract_json_block(cleaned)
+        
+        try:
+            new_scenes = json.loads(cleaned)
+        except Exception:
+            new_scenes = {}
+
+        # ── Combine and Save ─────────────────────────────────────────────
+        response = {}
+        for artifact_type in existing_artifacts.keys():
+            # Combine reference data with LLM generated extras
+            ref_scenes = existing_artifacts[artifact_type]
+            llm_scenes = new_scenes.get(artifact_type, {}).get("scenes", [])
+            
+            # Ensure all LLM items have valid UUIDs
+            for scene in llm_scenes:
+                if "ID" not in scene or not scene["ID"] or scene["ID"] == "<uuid>":
+                    scene["ID"] = str(uuid.uuid4())
+
+            combined_scenes = ref_scenes + llm_scenes
+            
+            doc = {
+                "model_id": model_id,
+                "type": artifact_type,
+                "scenes": combined_scenes
+            }
+            
+            result = db.Cybersecurity.insert_one(doc)
+            doc["_id"] = str(result.inserted_id)
+            response[artifact_type] = doc
+
+        print(f"  ✅ Cybersecurity generation complete. Saved artifacts across {len(existing_artifacts.keys())} categories.")
+        return response
+        
+    except Exception as e:
+        print(f"  ⚠️ Cybersecurity generation warning: {e}")
+        return {"message": "Cybersecurity generation skipped or partially failed", "error": str(e)}
+
+@modelprompt.route('/v1/generate/cybersecurity-artifacts', methods=['POST'])
+def generate_cybersecurity_artifacts():
+    """
+    Generate and save cybersecurity requirements, controls, goals, and claims with RAG.
+    """
+    try:
+        # Check if the request is JSON
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+
+        model_id = data.get('modelId', '')
+        system_name = data.get('systemName', '')
+        user_prompt = data.get('cybersecurityPrompt', '')
+
+        if not model_id or not system_name:
+            return jsonify({"error": "Missing modelId or systemName"}), 400
+
+        # ── Pull reference data ──────────────────────────────────────────
+        from app.v1.rag.components import resolve_ecu, resolve_reference_report
+        from app.v1.rag.azure_client import get_azure_client
+        from app.v1.rag.config import AZURE_PATHS
+        import copy
+        import uuid
+
+        reference_data = None
+        try:
+            client = get_azure_client()
+            reports_path = AZURE_PATHS["REPORTS_PATH"].rstrip('/')
+            bms_1_blob = f"{reports_path}/bms_1.json"
+            reference_data = client.download_json(bms_1_blob)
+        except Exception as e:
+            print(f"  ⚠️ Could not pull bms_1.json: {e}")
+
+        if not reference_data and system_name:
+            ecu_entry = resolve_ecu(system_name)
+            reference_data = resolve_reference_report(ecu_entry, system_name)
+
+        existing_artifacts = {
+            "cybersecurity_requirements": [],
+            "cybersecurity_controls": [],
+            "cybersecurity_claims": [],
+            "cybersecurity_goals": []
+        }
+
+        if reference_data and "Cybersecurity" in reference_data:
+            for cyber_block in reference_data["Cybersecurity"]:
+                c_type = cyber_block.get("type", "")
+                if c_type in existing_artifacts:
+                    for scene in cyber_block.get("scenes", []):
+                        scene_copy = copy.deepcopy(scene)
+                        scene_copy["ID"] = str(uuid.uuid4())
+                        scene_copy["threat_id"] = None
+                        scene_copy["threat_key"] = None
+                        scene_copy["attack_scene_id"] = None
+                        scene_copy["attack_scene_name"] = None
+                        existing_artifacts[c_type].append(scene_copy)
+
+        # ── Prompt generation ────────────────────────────────────────────
+        default_prompt = f"""
+            You are an expert in cybersecurity engineering (ISO/SAE 21434).
+            Generate cybersecurity_requirements, cybersecurity_controls, cybersecurity_goals,
+            and cybersecurity_claims for the system '{system_name}'.
+            """
+
+        existing_context = ""
+        if any(existing_artifacts.values()):
+            existing_context = f"""
+            ### EXISTING ARTIFACTS (DO NOT DUPLICATE THESE):
+            {json.dumps(existing_artifacts, indent=2)}
+
+            Generate 2-3 ADDITIONAL items for EACH category that are not already covered above.
+            """
+
+        data_structure_prompt = """
+            Return ONLY valid JSON combining your NEW items in the exact format below:
+            {
+            "cybersecurity_requirements": {
+                "scenes": [{"ID": "<uuid>", "Name": "<requirement name>", "Description": "<description>", "threat_id": null}]
+            },
+            "cybersecurity_controls": {
+                "scenes": [{"ID": "<uuid>", "Name": "<control name>", "Description": "<description>", "threat_id": null}]
+            },
+            "cybersecurity_claims": {
+                "scenes": [{"ID": "<uuid>", "Name": "<claim name>", "Description": "<description>", "threat_id": null}]
+            },
+            "cybersecurity_goals": {
+                "scenes": [{"ID": "<uuid>", "Name": "<goal name>", "Description": "<description>", "threat_id": null}]
+            }
+            }
             - Each section must have a "scenes" array as shown.
             - Do NOT include any explanation or extra text.
             """
 
-        final_prompt = (user_prompt or default_prompt) + data_structure_prompt
+        final_prompt = (user_prompt or default_prompt) + existing_context + data_structure_prompt
 
         gemini_response = gemini_client.generate_content(final_prompt)
         content_text = gemini_client.get_text(gemini_response)
@@ -2974,29 +3086,30 @@ def generate_cybersecurity_artifacts():
         cleaned = extract_json_block(cleaned)
 
         try:
-            all_scenes = json.loads(cleaned)
+            new_scenes = json.loads(cleaned)
         except Exception as e:
-            return jsonify({"error": f"Failed to parse Gemini response: {str(e)}", "raw": cleaned}), 500
+            # If the LLM entirely fails, we still want to save our reference data
+            print(f"  ⚠️ LLM response parsing failed for cybersecurity artifacts: {e}")
+            new_scenes = {}
 
         response = {}
-        for artifact_type in [
-            "cybersecurity_requirements",
-            "cybersecurity_controls",
-            "cybersecurity_claims",
-            "cybersecurity_goals"
-        ]:
-            scenes_obj = all_scenes.get(artifact_type, {})
-            scenes = scenes_obj.get("scenes")
-            if not isinstance(scenes, list):
-                return jsonify({
-                    "error": f"Gemini response for {artifact_type} did not contain a 'scenes' list.",
-                    "raw": scenes_obj
-                }), 500
+        for artifact_type in existing_artifacts.keys():
+            ref_scenes = existing_artifacts[artifact_type]
+            llm_scenes = new_scenes.get(artifact_type, {}).get("scenes", [])
+            
+            if not isinstance(llm_scenes, list):
+                llm_scenes = []
+
+            for scene in llm_scenes:
+                if "ID" not in scene or not scene["ID"] or scene["ID"] == "<uuid>":
+                    scene["ID"] = str(uuid.uuid4())
+
+            combined_scenes = ref_scenes + llm_scenes
 
             doc = {
                 "model_id": model_id,
                 "type": artifact_type,
-                "scenes": scenes
+                "scenes": combined_scenes
             }
 
             result = db.Cybersecurity.insert_one(doc)
@@ -3006,8 +3119,9 @@ def generate_cybersecurity_artifacts():
         return jsonify(response), 200
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error in generate_cybersecurity": str(e)}), 500
-
 
 # Risk Treatment creation
 @modelprompt.route("/v1/generate/generate-risk-treatments", methods=["POST"])
