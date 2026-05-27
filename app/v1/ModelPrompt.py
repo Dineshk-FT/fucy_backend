@@ -1952,21 +1952,15 @@ def generate_attack_trees_with_gemini(threat_scenarios, model_id, user_prompt=No
         raise ValueError(f"Failed to parse Gemini attack tree response: {str(e)}")
 
 
-@modelprompt.route('/v1/generate/attack-tree', methods=['POST'])
-def generate_attack_tree():
-    """Generate attack trees with reference extraction + LLM extras pattern."""
+def generate_attack_tree_internal(model_id, system_name='', user_prompt=''):
+    """
+    Core logic for attack tree generation — callable without a Flask request context.
+    Returns (dict, int) of (response_body, status_code).
+    """
     try:
-        if request.is_json:
-            data = request.get_json()
-        else:
-            data = request.form
-
-        model_id = data.get('modelId', '')
-        user_prompt = data.get('attackscenarioPrompt', '')
-        system_name = data.get('systemName', '')
         
         if not model_id:
-            return jsonify({"error": "Missing modelId"}), 400
+            return {"error": "Missing modelId"}, 400
 
         # ── Load threat scenarios ──────────────────────────────────────────
         user_defined_ts = list(
@@ -1977,7 +1971,7 @@ def generate_attack_tree():
         )
 
         if not user_defined_ts:
-            return jsonify({"error": "No user-defined threat scenarios found"}), 404
+            return {"error": "No user-defined threat scenarios found"}, 404
 
         # ── Pull reference data ──────────────────────────────────────────
         from app.v1.rag.components import resolve_ecu, resolve_reference_report
@@ -2081,7 +2075,7 @@ def generate_attack_tree():
                     "scenes": existing_attacks
                 })
 
-            return jsonify({
+            return {
                 "message": "Attack trees loaded from reference (all scenarios already covered)",
                 "model_id": model_id,
                 "stats": {
@@ -2093,7 +2087,7 @@ def generate_attack_tree():
                     "new_attacks": 0,
                     "skipped_llm": True
                 }
-            }), 200
+            }, 200
 
         # ── Generate extras via LLM for uncovered scenarios ───────────────
         new_attack_trees = []
@@ -2112,7 +2106,31 @@ def generate_attack_tree():
             )
             
             try:
-                gemini_response = gemini_client.generate_content(prompt)
+                import threading
+                LLM_TIMEOUT = 120  # seconds — bail before any gateway/frontend timeout
+
+                llm_result = [None]
+                llm_error  = [None]
+
+                def _call_llm():
+                    try:
+                        llm_result[0] = gemini_client.generate_content(prompt)
+                    except Exception as ex:
+                        llm_error[0] = ex
+
+                t = threading.Thread(target=_call_llm, daemon=True)
+                t.start()
+                t.join(timeout=LLM_TIMEOUT)
+
+                if t.is_alive() or llm_result[0] is None:
+                    raise TimeoutError(
+                        f"LLM call exceeded {LLM_TIMEOUT}s timeout"
+                        + (f": {llm_error[0]}" if llm_error[0] else "")
+                    )
+                if llm_error[0]:
+                    raise llm_error[0]
+
+                gemini_response = llm_result[0]
                 content_text = gemini_client.get_text(gemini_response)
                 
                 # Better JSON cleaning
@@ -2128,12 +2146,25 @@ def generate_attack_tree():
                 cleaned = re.sub(r"```[a-z]*\n?", "", content_text).strip()
                 attack_data = json.loads(cleaned)
                 
+                processed_scenarios = preprocess_threat_scenarios(
+                    list(db.Threat_scenarios.find({"model_id": model_id, "type": "derived"}))
+                )
+
                 for tree in attack_data.get("attack_trees", []):
                     if "templates" in tree:
-                        tree["templates"] = structure_attack_tree_templates(
-                            tree["templates"],
-                            processed_scenarios=preprocess_threat_scenarios(list(db.Threat_scenarios.find({"model_id": model_id, "type": "derived"})))
-                        )
+                        # ── Fix: ensure every template has a type='default' root node
+                        # so structure_attack_tree_templates doesn't raise "No root node"
+                        nodes = tree["templates"].get("nodes", [])
+                        if nodes and not any(n.get("type") == "default" for n in nodes):
+                            # Promote the first node (which should be the root) to type=default
+                            nodes[0]["type"] = "default"
+                        try:
+                            tree["templates"] = structure_attack_tree_templates(
+                                tree["templates"],
+                                processed_scenarios=processed_scenarios
+                            )
+                        except Exception as struct_err:
+                            print(f"  ⚠️ structure_attack_tree_templates warning: {struct_err} — using raw templates")
                     tree["ID"] = str(uuid.uuid4())
                     new_attack_trees.append(tree)
                 
@@ -2148,8 +2179,7 @@ def generate_attack_tree():
             except Exception as e:
                 print(f"  ⚠️ LLM failed after {time.time() - llm_start:.2f}s: {e}")
                 print(f"  📝 Saving reference data only (LLM extras failed)")
-                # Don't generate fallback trees - they're usually poor quality
-                # Just save the reference data
+                # Continue — reference data (existing_attack_trees) is still valid
 
         # ── Combine and save ────────────────────────────────────────────────
         combined_trees = existing_attack_trees + new_attack_trees
@@ -2182,7 +2212,7 @@ def generate_attack_tree():
                 "scenes": combined_attacks
             })
 
-        return jsonify({
+        return {
             "message": "Attack trees generated successfully",
             "model_id": model_id,
             "stats": {
@@ -2193,11 +2223,27 @@ def generate_attack_tree():
                 "from_reference_attacks": len(existing_attacks),
                 "new_attacks": len(new_attacks)
             }
-        }), 200
+        }, 200
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error in attack tree generation": str(e)}), 500
+        return {"error in attack tree generation": str(e)}, 500
+
+
+@modelprompt.route('/v1/generate/attack-tree', methods=['POST'])
+def generate_attack_tree():
+    """Generate attack trees — thin HTTP wrapper around generate_attack_tree_internal."""
+    if request.is_json:
+        data = request.get_json()
+    else:
+        data = request.form
+
+    model_id    = data.get('modelId', '')
+    user_prompt = data.get('attackscenarioPrompt', '')
+    system_name = data.get('systemName', '')
+
+    body, status = generate_attack_tree_internal(model_id, system_name, user_prompt)
+    return jsonify(body), status
 
 
 def build_attack_tree_prompt(system_name, uncovered_ts, architecture, existing_count):
@@ -2740,23 +2786,16 @@ def generate_full_attack_pipeline():
         print(f"\n=== [FULL ATTACK PIPELINE] STARTED for model {model_id} ===")
         total_start = time.time()
         
-        # Step 1: Generate attack trees (this now handles reference extraction internally)
+        # Step 1: Generate attack trees — call the internal function directly
+        # so we never invoke the HTTP route from within another route handler.
         t1 = time.time()
-        attack_tree_response = generate_attack_tree()
+        attack_tree_data, attack_tree_status = generate_attack_tree_internal(model_id, system_name, user_prompt)
         attack_tree_time = time.time() - t1
-        
-        # Extract data from response
-        if hasattr(attack_tree_response, 'get_json'):
-            attack_tree_data = attack_tree_response.get_json()
-            attack_tree_status = attack_tree_response.status_code
-        else:
-            attack_tree_data = attack_tree_response[0].get_json() if isinstance(attack_tree_response, tuple) else attack_tree_response
-            attack_tree_status = 200
         
         print(f"[TIMING] Attack tree generation took {attack_tree_time:.2f}s")
         
         if attack_tree_status != 200:
-            return attack_tree_response, attack_tree_status
+            return jsonify(attack_tree_data), attack_tree_status
 
         # Step 2: Convert possible events to cybersecurity requirements
         t2 = time.time()
@@ -3268,9 +3307,10 @@ def generate_full_model():
         )
 
         # Generate attack trees
-        with current_app.test_request_context(method='POST', data={'modelId': template_response['model_id'], "attackscenarioPrompt": request.form.get('attackscenarioPrompt', '')}):
-            attack_response = generate_attack_tree()
-            attack_tree_data = attack_response.get_json() if hasattr(attack_response, 'get_json') else {}
+        attack_tree_data, _ = generate_attack_tree_internal(
+            model_id=template_response['model_id'],
+            user_prompt=request.form.get('attackscenarioPrompt', '')
+        )
 
         with current_app.test_request_context(
             method='POST',
