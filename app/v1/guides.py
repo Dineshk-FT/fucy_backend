@@ -4,11 +4,15 @@ from datetime import datetime, timedelta
 import os
 from config import Config
 import re
+import json
 
 guides = Blueprint("guides", __name__)
 AZURE_CONNECTION_STRING = Config.AZURE_CONNECTION_STRING
 CONTAINER_NAME = "assets"
 blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
+
+RAG_CONTAINER_NAME = "rag"
+FILE_NAME = "dataecu.json"
 
 @guides.route('/v1/guides/videos', methods=['GET'])
 def get_all_video_urls():
@@ -37,3 +41,30 @@ def get_all_video_urls():
     except Exception as e:
         # print(f"Error: {e}")
         return jsonify({"error": f"Failed to fetch videos: {str(e)}"}), 500
+
+
+@guides.route('/v1/guides/rag', methods=['GET'])
+def get_rag_data():
+    try:
+        # 1. Get a client for the specific blob
+        blob_client = blob_service_client.get_blob_client(
+            container=RAG_CONTAINER_NAME, 
+            blob=FILE_NAME
+        )
+        
+        # 2. Download the blob data and read it
+        download_stream = blob_client.download_blob()
+        file_content = download_stream.readall()
+        
+        # 3. Parse the JSON content
+        data = json.loads(file_content)
+        
+        # 4. Extract the 'ecus' array (default to empty list if not found)
+        ecus_array = data.get("ecus", [])
+        
+        # 5. Return the array
+        return jsonify({"ecus": ecus_array})
+        
+    except Exception as e:
+        # print(f"Error: {e}")
+        return jsonify({"error": f"Failed to fetch ECU data: {str(e)}"}), 500
