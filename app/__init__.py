@@ -132,4 +132,12 @@ def create_app():
     
     app.register_blueprint(modelprompt)
 
+    from app.v1.Testcasegen import app as testcasegen
+
+    app.register_blueprint(testcasegen)
+
+    from app.v1.Contact import app as contact
+    
+    app.register_blueprint(contact)
+
     return app
