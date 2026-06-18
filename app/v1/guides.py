@@ -32,7 +32,7 @@ def get_all_video_urls():
                 blob_name=blob.name,
                 account_key=account_key,
                 permission=BlobSasPermissions(read=True),
-                expiry=datetime.utcnow() + timedelta(minutes=15)
+                expiry=datetime.utcnow() + timedelta(hours=12)
             )
             url = f"https://{blob_service_client.account_name}.blob.core.windows.net/{CONTAINER_NAME}/{blob.name}?{sas_token}"
             video_urls.append({"name": blob.name, "url": url})
