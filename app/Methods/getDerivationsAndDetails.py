@@ -34,7 +34,7 @@ def getDerivationsAndDetails(template, existing_details=None):
             Details.append(
                 {
                     "nodeId": node.get("id"),
-                    "name": node.get("data", {}).get("label"),
+                    "name": node.get("data", {}).get("label") or node.get("data", {}).get("name"),
                     'desc': node.get('data', {}).get('description'),
                     "type": node.get("type"),
                     "props": [
@@ -62,7 +62,7 @@ def getDerivationsAndDetails(template, existing_details=None):
         Details.append(
             {
                 "nodeId": edge.get("id"),
-                "name": edge.get("data", {}).get("label"),
+                "name": edge.get("data", {}).get("label") or edge.get("data", {}).get("name") or "edge",
                 'desc': edge.get('data', {}).get('description'),
                 "type": edge.get("type"),
                 "props": [

@@ -10,6 +10,9 @@ from app.v1.gemini.main import GeminiClient
 from config import Config
 from datetime import datetime
 import re
+import concurrent.futures
+
+from app.v1.rag.components import resolve_ecu, build_enriched_query
 
 from dotenv import load_dotenv
 
@@ -42,7 +45,7 @@ class JSONEncoder(json.JSONEncoder):
 def _safe_json_parse(raw: str):
     """Strip markdown fences and parse JSON; return None on failure."""
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
-    # Extract first JSON array or object
+  # Extract first JSON array or object
     match = re.search(r"(\[.*\]|\{.*\})", cleaned, re.DOTALL)
     if match:
         cleaned = match.group(1)
@@ -54,13 +57,17 @@ def _safe_json_parse(raw: str):
 
 def _build_test_case_prompt(asset: str, interface: str, threat: str,
                              attack_path: str, risk: str,
-                             user_prompt: str | None) -> str:
+                             user_prompt: str | None,
+                             rag_context: str | None = None) -> str:
     """
     Build the Gemini prompt for security test case generation.
     Always returns a JSON array so _safe_json_parse can handle it.
     """
+    
+    # Inject the Caring Caribou persona directly into the base context
     base_context = f"""
 You are an automotive cybersecurity engineer following ISO/SAE 21434 and UNECE WP.29 standards.
+You specialize in using the 'caringcaribou' (cc.py) tool for CAN bus fuzzing, diagnostic (UDS) exploitation, and network mapping.
 
 Given the following TARA input:
   Asset        : {asset}
@@ -70,25 +77,33 @@ Given the following TARA input:
   Risk Level   : {risk}
 """
 
+    rag_section = ""
+    if rag_context:
+        rag_section = f"""
+System Reference Data (RAG Context):
+Use the following documentation to find exact ECU IDs, original CAN IDs, and hex codes.
+{rag_context}
+"""
+
     custom_section = f"\nAdditional instructions from user:\n{user_prompt}\n" if user_prompt else ""
 
+    # Explicitly instruct the AI to use Caring Caribou syntax in the schema
     schema = """
 Generate a JSON array of security test specifications. Each object MUST include:
   - "threat"          : (string) the threat name
   - "test_objective"  : (string) what the test aims to verify
   - "protocol"        : (string) communication protocol under test (e.g. UDS, CAN, Ethernet)
   - "service"         : (string) protocol service identifier (e.g. 0x27, 0x2E, N/A)
-  - "technique"       : (string) test technique name (e.g. SecurityAccessFuzz, ReplayAttack)
-  - "preconditions"   : (array of strings) setup steps required before the test
-  - "steps"           : (array of strings) ordered test execution steps
-  - "expected_result" : (string) what a PASS looks like
+  - "technique"       : (string) test technique name (e.g. Diagnostic Fuzzing, Bruteforce Security Access)
+  - "preconditions"   : (array of strings) setup steps required before the test (e.g., 'Ensure CAN interface is up', 'Identify target ECU RX/TX IDs')
+  - "steps"           : (array of strings) ordered test execution steps. CRITICAL: For CAN or UDS testing, you MUST output exact command-line executions using 'caringcaribou' syntax (e.g., `cc.py uds ...`, `cc.py fuzzer ...`, `cc.py dcm ...`). You MUST incorporate exact CAN IDs / hex codes extracted from the System Reference Data as arguments in these commands.
+  - "expected_result" : (string) what a PASS looks like (e.g., 'The fuzzer causes no unexpected ECU resets' or 'Security access is denied')
   - "severity"        : (string) one of Critical / High / Medium / Low
 
 Output ONLY valid JSON array — no markdown fences, no explanation, no extra text.
 """
 
-    return base_context + custom_section + schema
-
+    return base_context + rag_section + custom_section + schema
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /v1/testcases/generate
@@ -97,87 +112,129 @@ Output ONLY valid JSON array — no markdown fences, no explanation, no extra te
 @app.route("/v1/testcases/generate", methods=["POST"])
 def generate_test_cases():
     """
-    Generate AI-powered security test cases from TARA inputs and persist them.
-
-    Form fields (all required unless noted):
-      modelId      – existing model ObjectId
-      asset        – asset under test (e.g. "Gateway ECU")
-      interface    – communication interface (e.g. "UDS")
-      threat       – threat name (e.g. "Unauthorized Diagnostic Access")
-      attackPath   – attack path (e.g. "CAN → UDS → Security Access")
-      risk         – risk level (e.g. "High")
-      userPrompt   – (optional) free-text override / extra instructions
+    Generate AI-powered security test cases by fetching model threats directly.
+    Uses multithreading to avoid HTTP timeouts when generating multiple scenarios.
     """
     try:
-        model_id    = request.form.get("modelId")
-        asset       = request.form.get("asset")
-        interface   = request.form.get("interface")
-        threat      = request.form.get("threat")
-        attack_path = request.form.get("attackPath")
-        risk        = request.form.get("risk")
-        user_prompt = request.form.get("userPrompt")  # optional
+        # ── 1. Parse Request ──────────────────────────────────────────────────
+        if request.is_json:
+            model_id = request.json.get("modelId")
+            user_prompt = request.json.get("userPrompt") # Optional
+        else:
+            model_id = request.form.get("modelId")
+            user_prompt = request.form.get("userPrompt") # Optional
 
-        # ── Validate required fields ──────────────────────────────────────────
-        missing = [f for f, v in {
-            "modelId": model_id, "asset": asset, "interface": interface,
-            "threat": threat, "attackPath": attack_path, "risk": risk
-        }.items() if not v]
+        if not model_id:
+            return jsonify({"error": "Missing required field: modelId"}), 400
 
-        if missing:
-            return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+        if not ObjectId.is_valid(model_id):
+            return jsonify({"error": "Invalid model_id format"}), 400
 
-        # ── Verify model exists ───────────────────────────────────────────────
+        # ── 2. Verify model exists ────────────────────────────────────────────
         model_doc = db["Models"].find_one({"_id": ObjectId(model_id)})
         if not model_doc:
             return jsonify({"error": f"No model found with id {model_id}"}), 404
 
-        # ── Call Gemini ───────────────────────────────────────────────────────
-        prompt   = _build_test_case_prompt(asset, interface, threat, attack_path, risk, user_prompt)
-        response = gemini_client.generate_content(prompt)
-        raw_text = gemini_client.get_text(response).strip()
+        # ── 3. Extract Threat Scenarios ───────────────────────────────────────
+        # Fetch all threat scenario documents for this model
+        threat_cursor = db.Threat_scenarios.find({"model_id": str(model_id)})
+        
+        threat_details = []
+        for doc in threat_cursor:
+            # Extract the Details array from each document and add it to our master list
+            details = doc.get("Details", [])
+            threat_details.extend(details)
 
-        test_cases = _safe_json_parse(raw_text)
-        if not test_cases:
-            return jsonify({
-                "error": "Could not parse AI response as JSON",
-                "raw_response": raw_text
-            }), 500
+        if not threat_details:
+            return jsonify({"error": "No threat scenarios found in the specified model."}), 400
 
-        # Normalise: wrap single object in a list
-        if isinstance(test_cases, dict):
-            test_cases = [test_cases]
+        # ── 4. RAG Context Retrieval ──────────────────────────────────────────
+        rag_context = ""
+        system_name = model_doc.get("name", "System")
+        try:
+            ecu_entry = resolve_ecu(system_name)
+            if ecu_entry:
+                rag_context = build_enriched_query(system_name, ecu_entry)
+        except Exception as e:
+            print(f"Warning: RAG context retrieval failed for {system_name}: {e}")
 
-        # ── Enrich each test case with metadata ───────────────────────────────
-        enriched = []
-        for tc in test_cases:
-            tc.update({
-                "model_id"   : model_id,
-                "asset"      : asset,
-                "interface"  : interface,
-                "attack_path": attack_path,
-                "risk"       : risk,
-                "created_at" : datetime.utcnow().isoformat(),
-            })
-            enriched.append(tc)
+        # ── 5. Worker Function for Multithreading ─────────────────────────────
+        def process_scenario(scenario):
+            # Map the properties from the Threat scenario details
+            asset       = model_doc.get("name", "System Asset")
+            interface   = "CAN/UDS" # Defaulting, or extract if defined in scenario
+            threat      = scenario.get("Name", "Unknown Threat")
+            attack_path = "External -> Network -> ECU" # Defaulting
+            risk        = scenario.get("overall_rating", "High")
+            
+            prompt = _build_test_case_prompt(
+                asset, interface, threat, attack_path, risk, user_prompt, rag_context
+            )
+            
+            try:
+                # Call Gemini API
+                response = gemini_client.generate_content(prompt)
+                raw_text = gemini_client.get_text(response).strip()
 
-        # ── Persist to MongoDB ────────────────────────────────────────────────
-        result     = db["TestCases"].insert_many(enriched)
+                test_cases = _safe_json_parse(raw_text)
+                if not test_cases:
+                    return []
+
+                # Ensure it's a list
+                if isinstance(test_cases, dict):
+                    test_cases = [test_cases]
+
+                enriched = []
+                for tc in test_cases:
+                    tc.update({
+                        "model_id"   : str(model_id),
+                        "asset"      : asset,
+                        "interface"  : interface,
+                        "attack_path": attack_path,
+                        "risk"       : risk,
+                        "created_at" : datetime.utcnow().isoformat(),
+                    })
+                    enriched.append(tc)
+                return enriched
+            except Exception as e:
+                print(f"Error processing {threat}: {e}")
+                return []
+
+        # ── 6. Process All Threats in Parallel ────────────────────────────────
+        all_enriched_test_cases = []
+        
+        # Using ThreadPoolExecutor to run API calls concurrently
+        # max_workers=5 keeps it fast but prevents 429 Too Many Requests errors from Google
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Map the scenarios to the worker function
+            results = list(executor.map(process_scenario, threat_details))
+            
+        # Flatten the nested lists returned by the threads
+        for result_list in results:
+            if result_list:
+                all_enriched_test_cases.extend(result_list)
+
+        if not all_enriched_test_cases:
+            return jsonify({"error": "Failed to parse valid test cases from AI response."}), 500
+
+        # ── 7. Persist to MongoDB (Bulk Insert) ───────────────────────────────
+        result     = db["TestCases"].insert_many(all_enriched_test_cases)
         inserted   = [str(oid) for oid in result.inserted_ids]
 
-        # Attach string _id back to each enriched doc for the response
-        for tc, oid in zip(enriched, inserted):
+        # Attach the string _id back so the frontend can read it
+        for tc, oid in zip(all_enriched_test_cases, inserted):
             tc["_id"] = oid
 
         return jsonify({
-            "message"       : "Test cases generated and saved successfully",
-            "model_id"      : model_id,
-            "test_cases"    : enriched,
+            "message"       : f"Generated and saved {len(inserted)} test cases.",
+            "model_id"      : str(model_id),
+            "test_cases"    : all_enriched_test_cases,
             "inserted_count": len(inserted),
         }), 201
 
     except Exception as e:
+        print(f"Internal Error in generate_test_cases: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /v1/testcases/<model_id>
