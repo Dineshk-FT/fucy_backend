@@ -234,19 +234,33 @@ def check_user_status():
     try:
         email = request.form.get("email")
         org = request.form.get("org")
+        
         if not email or not org:
             return jsonify({"error": "Email and Organization are required"}), 400
+            
+        # 1. Fetch the user from the database first
         user_with_email = db.accounts.find_one({
             "$or": [{"email": email}, {"username": email}]
         })
+        
         if not user_with_email:
-            return jsonify({"exists": False, "message": "User not found"}), 200
+            return jsonify({"exists": False, "message": f'User not found in the organization {org}'}), 200
+            
+        # 2. Check if the database record indicates the user is an admin
+        # Adjust "user_type" if your database field is named differently (e.g., "role")
+        if user_with_email.get("user_type") == "admin":
+            return jsonify({"exists": True, "message": f'User found in the organization {org}'}), 200
+
+        # 3. For non-admins, proceed with the organization-specific check
         user = db.accounts.find_one({"email": email, "org": org})
+        
         if not user:
-            return jsonify({"exists": False, "message": "User not found in this organization"}), 200
+            return jsonify({"exists": False, "message": f'User not found in the organization {org}'}), 200
+            
         license_end = user.get("license_end")
         trialUsed = user.get("license_type") == "trial"
         trialExpired = trialUsed and license_end and license_end < datetime.utcnow()
+        
         return jsonify({
             "exists": True,
             "trialUsed": trialUsed,
@@ -254,6 +268,7 @@ def check_user_status():
             "license_end": license_end.isoformat() if license_end else None,
             "message": "Valid trial license" if trialUsed else "Valid user with no trial license"
         }), 200
+        
     except Exception as e:
         current_app.logger.error(f"Error in check_user_status: {str(e)}")
         return jsonify({"error": str(e)}), 500
