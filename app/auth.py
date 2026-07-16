@@ -1,8 +1,7 @@
-from flask import current_app, request, jsonify
+from flask import current_app, request, jsonify, Blueprint
 from werkzeug.security import generate_password_hash, check_password_hash
 from db import db
 import uuid
-from flask import Blueprint
 from datetime import datetime, timedelta
 from bson import ObjectId
 import random
@@ -12,6 +11,7 @@ import stripe
 from flask_mail import Mail, Message
 import secrets
 import string
+from functools import wraps # <--- ADDED THIS IMPORT
 
 # Initialize Flask-Mail in your app
 mail = Mail()
@@ -31,6 +31,37 @@ def generate_license_key():
         )
         if not db.accounts.find_one({"license_key": key}):
             return key
+
+
+# ==========================================
+# THE AUTHORIZATION DECORATOR
+# Import this into your other files!
+# ==========================================
+def require_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # 1. Grab the header
+        user_id = request.headers.get("user-id")
+        
+        # 2. Check if it's missing
+        if not user_id:
+            return jsonify({"error": "Unauthorized: user-id header is required"}), 401
+            
+        try:
+            # 3. Validate user exists
+            user = db.accounts.find_one({"_id": ObjectId(user_id)})
+            if not user:
+                return jsonify({"error": "Unauthorized: No such user found"}), 401
+        except Exception:
+            # Catches errors if the user-id isn't a valid 24-character ObjectId
+            return jsonify({"error": "Unauthorized: Invalid user-id format"}), 401
+            
+        # 4. If everything is good, proceed to the actual route function
+        return f(*args, **kwargs)
+        
+    return decorated_function
+# ==========================================
+
 
 auth = Blueprint("auth", __name__)
 
@@ -247,7 +278,6 @@ def check_user_status():
             return jsonify({"exists": False, "message": f'User not found in the organization {org}'}), 200
             
         # 2. Check if the database record indicates the user is an admin
-        # Adjust "user_type" if your database field is named differently (e.g., "role")
         if user_with_email.get("user_type") == "admin":
             return jsonify({"exists": True, "message": f'User found in the organization {org}'}), 200
 
@@ -314,6 +344,7 @@ def verify_otp():
         return jsonify({"error": str(e)}), 500
 
 @auth.route("/upgrade-license", methods=["POST"])
+# Note: You COULD put @require_auth here if you want to force them to be logged in to upgrade!
 def upgrade_license():
     try:
         user_id = request.form.get("user_id")
@@ -447,11 +478,9 @@ def forgot_password():
         if not email or not org:
             return jsonify({"error": "Email and organization are required"}), 400
         
-        # Generate random password        
         alphabet = string.ascii_letters + string.digits
         random_password = ''.join(secrets.choice(alphabet) for _ in range(12))
         
-        # Hash and update password
         hashed_password = generate_password_hash(random_password, method="pbkdf2:sha256")
         
         result = db.accounts.update_one(
@@ -462,7 +491,6 @@ def forgot_password():
         if result.modified_count == 0:
             return jsonify({"error": "User not found with provided email and organization"}), 400
         
-        # Send email using Flask-Mail
         try:
             msg = Message(
                 subject="🔒 Your Password Has Been Reset",
@@ -470,7 +498,6 @@ def forgot_password():
                 recipients=[email]
             )
             
-            # HTML-styled message
             msg.html = f"""
             <div style="font-family: Arial, sans-serif; color: #333; padding: 20px;">
                 <div style="max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); background-color: #fafafa;">
@@ -511,23 +538,21 @@ def forgot_password():
   
 
 @auth.route("/reset-password", methods=["POST"])
+# Note: Depending on your frontend flow, you might actually want to protect 
+# this specific route with @require_auth if they change passwords from inside the app!
 def reset_password():
     try:
-        # Get form data
-        identifier = request.form.get("identifier")  # Can be email or username
+        identifier = request.form.get("identifier") 
         org = request.form.get("org")
         old_password = request.form.get("old_password")
         new_password = request.form.get("new_password")
         
-        # Validate required fields
         if not all([identifier, org, old_password, new_password]):
             return jsonify({"error": "All fields are required"}), 400
         
-        # Validate new password strength
         if len(new_password) < 8:
             return jsonify({"error": "New password must be at least 8 characters long"}), 400
         
-        # Find user by email or username
         user = db.accounts.find_one({
             "$or": [
                 {"email": identifier},
@@ -539,14 +564,11 @@ def reset_password():
         if not user:
             return jsonify({"error": "User not found with provided credentials"}), 400
         
-        # Verify old password
         if not check_password_hash(user["password"], old_password):
             return jsonify({"error": "Current password is incorrect"}), 400
         
-        # Hash new password
         hashed_password = generate_password_hash(new_password, method="pbkdf2:sha256")
         
-        # Update password in database
         result = db.accounts.update_one(
             {"_id": user["_id"]},
             {"$set": {"password": hashed_password}}
