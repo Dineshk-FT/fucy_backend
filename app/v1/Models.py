@@ -2,6 +2,7 @@ from flask import current_app as app
 from flask import request, jsonify, json
 from bson import ObjectId
 from db import db
+from app.Methods.auth_helpers import get_user_id
 from datetime import datetime
 from flask import Blueprint
 import re
@@ -18,7 +19,7 @@ def hello():
 @app.route("/v1/get_details/models", methods=["POST"])
 def get_Models():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         model_type = request.form.get("type")  # Optional: 'library' or 'model'
          
         if not user_id:
@@ -59,7 +60,7 @@ def get_Models():
 @app.route("/v1/get_details/sub_systems", methods=["POST"])
 def get_sub_systems():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -216,7 +217,7 @@ def update_model_name():
 @app.route("/v1/add/models", methods=["POST"])
 def add_Model_or_Library():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         current = datetime.now()
         created_by = request.form.get("createdBy")
         name = request.form.get("name")

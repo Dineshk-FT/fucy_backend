@@ -2,6 +2,7 @@ from flask import current_app as app
 from flask import request, jsonify, json
 from bson import ObjectId
 from db import db
+from app.Methods.auth_helpers import get_user_id
 
 # import jwt,secrets
 # app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -15,7 +16,7 @@ app = Blueprint("routes", __name__)
 @app.route("/get_details/sidebarNode", methods=["POST"])
 def sideBarNode():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -36,7 +37,7 @@ def sideBarNode():
 @app.route("/get_details/templates", methods=["POST"])
 def templates():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -56,7 +57,7 @@ def templates():
 @app.route("/get_details/models", methods=["POST"])
 def models():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -109,7 +110,7 @@ def get_template_by_id(template_id):
 @app.route("/add/sidebarNode", methods=["POST"])
 def addSideBarNode():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -169,7 +170,7 @@ def addNode():
 @app.route("/add/templates", methods=["POST"])
 def addTemplets():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
@@ -192,7 +193,7 @@ def addTemplets():
 @app.route("/add/models", methods=["POST"])
 def addModels():
     try:
-        user_id = request.headers.get("user-id")
+        user_id = get_user_id()
 
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400

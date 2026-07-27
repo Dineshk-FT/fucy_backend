@@ -12,6 +12,7 @@ from flask_mail import Mail, Message
 import secrets
 import string
 from functools import wraps # <--- ADDED THIS IMPORT
+from app.Methods.auth_helpers import get_user_id, create_token, get_token_error
 
 # Initialize Flask-Mail in your app
 mail = Mail()
@@ -40,12 +41,18 @@ def generate_license_key():
 def require_auth(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 1. Grab the header
-        user_id = request.headers.get("user-id")
-        
-        # 2. Check if it's missing
+        # 1. Grab the token from the Authorization: Bearer <token> header
+        user_id = get_user_id()
+
+        # 2. Check if it's missing/expired/invalid, with a specific reason
+        #    so the frontend can tell an expired session apart from a bad one.
         if not user_id:
-            return jsonify({"error": "Unauthorized: user-id header is required"}), 401
+            reason = get_token_error()
+            if reason == "expired":
+                return jsonify({"error": "Unauthorized: token has expired", "reason": "token_expired"}), 401
+            if reason == "missing":
+                return jsonify({"error": "Unauthorized: Bearer token is required", "reason": "token_missing"}), 401
+            return jsonify({"error": "Unauthorized: invalid token", "reason": "token_invalid"}), 401
             
         try:
             # 3. Validate user exists
@@ -60,6 +67,7 @@ def require_auth(f):
         return f(*args, **kwargs)
         
     return decorated_function
+
 # ==========================================
 
 
@@ -424,7 +432,7 @@ def login():
                 "error": "License expired. Please upgrade to continue.",
                 "license_status": license_status
             }), 403
-        token = str(user["_id"])
+        token = create_token(user["_id"])
         model = db.Models.find_one(
             {"user_id": str(user["_id"]), "status": 1},
             sort=[("_id", -1)]
@@ -434,7 +442,8 @@ def login():
             "message": "Login Successful",
             "model_id": str(model_id),
             "org":user.get("org"),
-            "user-id": token,
+            "token": token,
+            "user-id": str(user["_id"]),  # kept for backward compatibility; use "token" as the Bearer token going forward
             "username": user["username"],
             "license_type": user.get("license_type"),
             "license_key": user.get("license_key"),
@@ -445,6 +454,7 @@ def login():
     except Exception as e:
         current_app.logger.error(f"Error in login: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 @auth.route("/request-reset-password", methods=["POST"])
 def request_reset_password():

@@ -6,6 +6,7 @@ from db import db
 from app.Methods.getDerivationsAndDetails import getDerivationsAndDetails
 from app.v1.RiskDeterminationAndTreatment import add_risk_treatment
 from app.Methods.helpers import  structure_attack_tree_templates, AttackTableoptions, threat_type, safe_json_parse
+from app.Methods.auth_helpers import get_user_id
 from app.v1.gemini.main import GeminiClient
 import random
 import os
@@ -133,7 +134,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
         # ── Parse request ──────────────────────────────────────────────────
         if request.is_json:
             data = request.get_json()
-            user_id      = request.headers.get("user-id")
+            user_id      = get_user_id()
             created_by   = data.get("createdBy", "system")
             system_name  = data.get("systemName", "Test System")
             custom_prompt = data.get("itemDefinitionPrompt")
@@ -141,7 +142,7 @@ def generate_reactflow_template(standalone=False, request_data=None):
             static_fields = {"createdBy", "systemName", "itemDefinitionPrompt", "modelId"}
             dynamic_fields = {k: v for k, v in data.items() if k not in static_fields}
         else:
-            user_id      = request.headers.get("user-id")
+            user_id      = get_user_id()
             created_by   = request_data.form.get("createdBy", "system")
             system_name  = request_data.form.get("systemName", "Test System")
             custom_prompt = request_data.form.get("itemDefinitionPrompt")

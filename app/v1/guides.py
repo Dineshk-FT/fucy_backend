@@ -7,8 +7,17 @@ import json
 from db import db
 from app.auth import require_auth  # <--- IMPORT THE DECORATOR HERE
 
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
+AZURE_CONNECTION_STRING = os.getenv("AZURE_CONNECTION_STRING")
+
+if not AZURE_CONNECTION_STRING:
+    raise RuntimeError("AZURE_CONNECTION_STRING is not set — check your .env file")
+
 guides = Blueprint("guides", __name__)
-AZURE_CONNECTION_STRING = Config.AZURE_CONNECTION_STRING
+
 CONTAINER_NAME = "assets"
 blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
 

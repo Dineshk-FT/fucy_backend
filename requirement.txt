@@ -27,6 +27,7 @@ dotenv==0.9.9
 svglib==1.5.1
 six==1.16.0
 beautifulsoup4
+PyJWT==2.9.0
 
 # -------------------------------
 # LangGraph (Agentic orchestration)
