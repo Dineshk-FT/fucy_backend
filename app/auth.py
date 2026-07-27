@@ -75,7 +75,7 @@ auth = Blueprint("auth", __name__)
 
 @auth.route("/", methods=["GET"])
 def hello():
-    return "WORKING SUCCESSFULLY"
+    return "WORKING SUCCESSFULLY 123"
 
 @auth.route("/verify-card", methods=["POST"])
 def verify_card():
