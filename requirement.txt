@@ -29,7 +29,7 @@ six==1.16.0
 beautifulsoup4
 PyJWT==2.9.0
 sentence-transformers-haystack
-pillow-10.4.0
+pillow==10.4.0
 
 # -------------------------------
 # LangGraph (Agentic orchestration)
