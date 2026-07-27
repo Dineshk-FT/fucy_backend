@@ -7,8 +7,7 @@ import os
 import re
 import uuid as _uuid
 from typing import Optional
-
-from haystack.components.embedders import (
+from haystack_integrations.components.embedders.sentence_transformers import (
     SentenceTransformersDocumentEmbedder,
     SentenceTransformersTextEmbedder,
 )
